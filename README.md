@@ -105,6 +105,39 @@ make
 make test
 ```
 
+## 当前用户安装与卸载
+
+推荐使用脚本安装到当前用户，不需要 `sudo`：
+
+```bash
+./scripts/install.sh
+```
+
+默认安装位置：
+
+```text
+可执行文件：~/.local/bin/otto
+提示词配置：~/.config/otto/
+安装状态：~/.local/state/otto/install.manifest
+```
+
+安装脚本会自动编译缺失的 `otto` 可执行文件；已有 API 配置、已有模式文件和当前激活模式都不会被覆盖。它也不会修改 `.bashrc` 等 Shell 配置文件，如果 `~/.local/bin` 不在 `PATH` 中，脚本只会给出提示。
+
+卸载时执行：
+
+```bash
+./scripts/uninstall.sh
+```
+
+卸载脚本只处理安装清单中由安装脚本创建、且内容没有被修改的可执行文件和提示词。用户后来修改过的文件、已有的 `config` API 配置文件和 `active_mode` 会被保留；因此卸载不会破坏现有环境。
+
+安装和卸载都支持自定义状态目录。安装时如果使用了 `--state-dir`，卸载时需要使用同一个路径：
+
+```bash
+./scripts/install.sh --prefix ~/.local --config-dir ~/.config/otto --state-dir ~/.local/state/otto
+./scripts/uninstall.sh --state-dir ~/.local/state/otto
+```
+
 安装到 `/usr/local/bin`：
 
 ```bash

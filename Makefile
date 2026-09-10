@@ -32,6 +32,7 @@ $(TARGET): $(SOURCES) $(wildcard include/otto/*.h)
 
 test: check-deps $(TARGET)
 	sh ./tests/test.sh ./$(TARGET)
+	sh ./tests/test_install.sh ./$(TARGET)
 
 clean:
 	rm -f $(TARGET) src/*.o
