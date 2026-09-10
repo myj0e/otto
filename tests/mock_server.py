@@ -25,6 +25,9 @@ def build_handler(capture_path):
 
             try:
                 request = json.loads(body.decode("utf-8"))
+                if request.get("stream") is not True:
+                    self.send_error(400)
+                    return
                 messages = request["messages"]
                 prompt = next(
                     message["content"]
@@ -38,17 +41,37 @@ def build_handler(capture_path):
                 self.send_error(400)
                 return
 
-            response = {
-                "choices": [
-                    {"message": {"role": "assistant", "content": f"mock: {prompt}"}}
-                ]
-            }
-            encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            self.wfile.write(encoded)
+            events = [
+                {
+                    "choices": [
+                        {"index": 0, "delta": {"role": "assistant", "content": "mock: "}}
+                    ]
+                },
+                {
+                    "choices": [
+                        {"index": 0, "delta": {"content": prompt}}
+                    ]
+                },
+                {
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "stop"}
+                    ]
+                },
+            ]
+            for event in events:
+                encoded = (
+                    "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                ).encode("utf-8")
+                # Deliberately split events across arbitrary transport chunks.
+                for offset in range(0, len(encoded), 7):
+                    self.wfile.write(encoded[offset:offset + 7])
+                    self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
 
         def log_message(self, _format, *_args):
             return

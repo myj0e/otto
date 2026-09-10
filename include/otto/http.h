@@ -5,11 +5,20 @@
 
 #include "otto/common.h"
 
+typedef int (*OttoHttpStreamCallback)(
+    const char *text,
+    size_t length,
+    void *userdata
+);
+
 typedef struct {
     const char *endpoint;
     const char *apikey;
     const char *body;
     size_t body_length;
+    int stream;
+    OttoHttpStreamCallback stream_callback;
+    void *stream_userdata;
     long connect_timeout_ms;
     long timeout_ms;
     size_t max_response_size;
@@ -19,6 +28,8 @@ typedef struct {
     long http_status;
     char *body;
     size_t body_length;
+    int streamed;
+    int stream_ends_with_newline;
     char error_message[OTTO_CURL_ERROR_SIZE];
 } OttoHttpResponse;
 

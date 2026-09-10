@@ -15,8 +15,15 @@ OttoExitCode otto_json_build_request(
     const char *model,
     const char *system_prompt,
     const char *prompt,
+    int stream,
     char **json,
     size_t *json_length
+);
+
+OttoExitCode otto_json_parse_stream_event(
+    const char *json,
+    size_t length,
+    char **content
 );
 
 OttoExitCode otto_json_parse_response(

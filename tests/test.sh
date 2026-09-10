@@ -72,13 +72,12 @@ answer=$(env \
 test "$answer" = 'mock: 你好 世界'
 rg -q '你好 世界' "$capture_file"
 rg -q 'test-model' "$capture_file"
-if rg -q '"role":"system"' "$capture_file"; then
-    echo "initial mode should be bare" >&2
-    exit 1
-fi
+rg -q '"stream":true' "$capture_file"
+rg -q '所有请求都会加载' "$capture_file"
 
 mode_directory="$temporary_directory/modes"
 mkdir -p "$mode_directory"
+cp "$test_root/system.md" "$mode_directory/system.md"
 cp "$test_root/otto.md" "$mode_directory/otto.md"
 printf '%s\n' 'test-mode-system-prompt' >"$mode_directory/test.md"
 
@@ -97,6 +96,7 @@ otto_answer=$(env \
     OTTO_CONFIG="$config_file" OTTO_MODE_DIR="$mode_directory" \
     "$binary" 你好 世界)
 test "$otto_answer" = 'mock: 你好 世界'
+rg -q '所有请求都会加载' "$capture_file"
 rg -q '嘴臭' "$capture_file"
 
 test_mode_answer=$(env \
@@ -114,6 +114,7 @@ mode_answer=$(env \
     OTTO_CONFIG="$config_file" OTTO_MODE_DIR="$mode_directory" \
     "$binary" 你好 世界)
 test "$mode_answer" = 'mock: 你好 世界'
+rg -q '所有请求都会加载' "$capture_file"
 rg -q 'test-mode-system-prompt' "$capture_file"
 
 raw_answer=$(env \
@@ -124,9 +125,10 @@ raw_answer=$(env \
     "$binary" --mode -- 你好 世界)
 test "$raw_answer" = 'mock: 你好 世界'
 if rg -q 'test-mode-system-prompt' "$capture_file"; then
-    echo "raw mode should omit the system prompt" >&2
+    echo "one-shot mode without an optional mode should omit the mode prompt" >&2
     exit 1
 fi
+rg -q '所有请求都会加载' "$capture_file"
 
 clear_mode_answer=$(env \
     OTTO_CONFIG="$config_file" "$binary" --mode)
@@ -140,8 +142,9 @@ bare_answer=$(env \
     OTTO_CONFIG="$config_file" OTTO_MODE_DIR="$mode_directory" \
     "$binary" 你好 世界)
 test "$bare_answer" = 'mock: 你好 世界'
-if rg -q '"role":"system"' "$capture_file"; then
-    echo "cleared mode should restore bare generation" >&2
+rg -q '所有请求都会加载' "$capture_file"
+if rg -q 'test-mode-system-prompt' "$capture_file"; then
+    echo "cleared mode should omit the optional mode prompt" >&2
     exit 1
 fi
 

@@ -302,9 +302,9 @@ void otto_cli_print_help(void)
     puts("用法:");
     puts("  otto <问题内容...>");
     puts("  otto --mode <模式>             (切换并保存模式)");
-    puts("  otto --mode                    (清除模式，恢复裸生成)");
+    puts("  otto --mode                    (清除附加模式，只保留统一 system prompt)");
     puts("  otto --mode <模式> <问题内容...>  (单次使用模式)");
-    puts("  otto --mode -- <问题内容...>     (单次裸生成)");
+    puts("  otto --mode -- <问题内容...>     (单次不附加模式)");
     puts("  otto --config");
     puts("  otto --config --name Openai --baseurl <URL> --apikey <KEY> [--model <MODEL>]");
     puts("  otto --help");
@@ -322,7 +322,8 @@ void otto_cli_print_help(void)
     puts("说明:");
     puts("  问题参数会自动用空格拼接，因此通常不需要加引号。");
     puts("  推荐使用 otto --config 进入交互式配置，API Key 不会显示在屏幕上。");
-    puts("  普通 otto <问题> 会使用已保存模式；未选择模式时不添加 system prompt。");
+    puts("  普通 otto <问题> 必定加载 system.md；有已保存模式时再附加该模式提示词。");
+    puts("  请求默认使用 SSE 流式输出，不需要额外配置。");
     puts("  name 只是服务名称；只要服务兼容 OpenAI Chat Completions 即可使用。");
     puts("  配置文件默认位于 $XDG_CONFIG_HOME/otto/config 或 ~/.config/otto/config。");
     puts("  可使用 OTTO_CONFIG 环境变量覆盖配置文件路径。");

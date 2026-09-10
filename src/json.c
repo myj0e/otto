@@ -442,8 +442,8 @@ static int json_parse_choice_object(JsonCursor *cursor, char **content)
         }
         json_skip_whitespace(cursor);
 
-        if (strcmp(key, "message") == 0 && cursor->cursor < cursor->end &&
-            *cursor->cursor == '{') {
+        if ((strcmp(key, "message") == 0 || strcmp(key, "delta") == 0) &&
+            cursor->cursor < cursor->end && *cursor->cursor == '{') {
             status = json_parse_message_object(cursor, content);
             free(key);
             free(text);
@@ -704,6 +704,7 @@ OttoExitCode otto_json_build_request(
     const char *model,
     const char *system_prompt,
     const char *prompt,
+    int stream,
     char **json,
     size_t *json_length
 )
@@ -711,7 +712,8 @@ OttoExitCode otto_json_build_request(
     OttoBuffer buffer;
     int status;
 
-    if (model == NULL || prompt == NULL || json == NULL || json_length == NULL) {
+    if (model == NULL || prompt == NULL || json == NULL || json_length == NULL ||
+        (stream != 0 && stream != 1)) {
         return OTTO_ERR_USAGE;
     }
 
@@ -752,8 +754,8 @@ OttoExitCode otto_json_build_request(
         return OTTO_ERR_MEMORY;
     }
     status = append_json_string(&buffer, prompt);
-    if (status != JSON_OK ||
-        otto_buffer_append_cstr(&buffer, "}],\"stream\":false}") != 0) {
+    if (status != JSON_OK || otto_buffer_append_cstr(&buffer, "}],\"stream\":") != 0 ||
+        otto_buffer_append_cstr(&buffer, stream ? "true}" : "false}") != 0) {
         otto_buffer_free(&buffer);
         return OTTO_ERR_MEMORY;
     }
@@ -862,4 +864,80 @@ OttoExitCode otto_json_parse_response(
         (void)set_result_message(&result->error_message, "API 响应中没有回答内容");
     }
     return OTTO_ERR_API;
+}
+
+OttoExitCode otto_json_parse_stream_event(
+    const char *json,
+    size_t length,
+    char **content
+)
+{
+    JsonCursor cursor;
+    char *key = NULL;
+    int status;
+
+    if (json == NULL || content == NULL) {
+        return OTTO_ERR_API;
+    }
+
+    *content = NULL;
+    cursor.cursor = json;
+    cursor.end = json + length;
+    json_skip_whitespace(&cursor);
+
+    if (cursor.cursor >= cursor.end || *cursor.cursor++ != '{') {
+        return OTTO_ERR_API;
+    }
+
+    json_skip_whitespace(&cursor);
+    if (cursor.cursor < cursor.end && *cursor.cursor == '}') {
+        cursor.cursor++;
+        return OTTO_OK;
+    }
+
+    for (;;) {
+        status = json_parse_string(&cursor, &key);
+        if (status != JSON_OK) {
+            free(key);
+            return status == JSON_MEMORY ? OTTO_ERR_MEMORY : OTTO_ERR_API;
+        }
+        json_skip_whitespace(&cursor);
+        if (cursor.cursor >= cursor.end || *cursor.cursor++ != ':') {
+            free(key);
+            return OTTO_ERR_API;
+        }
+        json_skip_whitespace(&cursor);
+
+        if (strcmp(key, "choices") == 0) {
+            status = json_parse_choices(&cursor, content);
+            free(key);
+            key = NULL;
+            if (status == JSON_FOUND) {
+                return OTTO_OK;
+            }
+            if (status != JSON_OK) {
+                return status == JSON_MEMORY ? OTTO_ERR_MEMORY : OTTO_ERR_API;
+            }
+        } else {
+            status = json_skip_value(&cursor);
+            free(key);
+            key = NULL;
+            if (status != JSON_OK) {
+                return status == JSON_MEMORY ? OTTO_ERR_MEMORY : OTTO_ERR_API;
+            }
+        }
+
+        json_skip_whitespace(&cursor);
+        if (cursor.cursor >= cursor.end) {
+            return OTTO_ERR_API;
+        }
+        if (*cursor.cursor == '}') {
+            cursor.cursor++;
+            return OTTO_OK;
+        }
+        if (*cursor.cursor++ != ',') {
+            return OTTO_ERR_API;
+        }
+        json_skip_whitespace(&cursor);
+    }
 }

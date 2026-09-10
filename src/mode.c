@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "otto/buffer.h"
 #include "otto/config.h"
 #include "otto/util.h"
 
@@ -454,6 +455,36 @@ OttoExitCode otto_mode_set_active(const char *mode)
     return code;
 }
 
+OttoExitCode otto_mode_combine_prompts(
+    const char *base_prompt,
+    const char *mode_prompt,
+    char **combined_prompt
+)
+{
+    OttoBuffer buffer;
+
+    if (base_prompt == NULL || combined_prompt == NULL) {
+        return OTTO_ERR_USAGE;
+    }
+    *combined_prompt = NULL;
+    otto_buffer_init(&buffer);
+
+    if (otto_buffer_append_cstr(&buffer, base_prompt) != 0 ||
+        (mode_prompt != NULL &&
+         (otto_buffer_append_cstr(&buffer, "\n\n") != 0 ||
+          otto_buffer_append_cstr(&buffer, mode_prompt) != 0))) {
+        otto_buffer_free(&buffer);
+        return OTTO_ERR_MEMORY;
+    }
+
+    *combined_prompt = otto_buffer_take(&buffer);
+    if (*combined_prompt == NULL) {
+        otto_buffer_free(&buffer);
+        return OTTO_ERR_MEMORY;
+    }
+    return OTTO_OK;
+}
+
 static OttoExitCode load_from_directory(
     const char *directory,
     const char *mode,
@@ -534,7 +565,7 @@ OttoExitCode otto_mode_load(
         &attempted_path
     );
     if (code != OTTO_OK || *found || explicit_directory ||
-        strcmp(mode, "otto") != 0) {
+        (strcmp(mode, "otto") != 0 && strcmp(mode, "system") != 0)) {
         if (code == OTTO_OK && !*found) {
             fprintf(stderr, "otto: 找不到模式文件：%s\n", attempted_path);
             code = OTTO_ERR_CONFIG;
@@ -544,7 +575,7 @@ OttoExitCode otto_mode_load(
         return code;
     }
 
-    /* While developing from the source tree, allow the bundled otto.md. */
+    /* While developing from the source tree, allow bundled prompt files. */
     free(attempted_path);
     attempted_path = NULL;
     code = load_from_directory(".", mode, system_prompt, found, &attempted_path);

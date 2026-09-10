@@ -9,6 +9,16 @@
 #include "otto/mode.h"
 #include "otto/url.h"
 
+static int write_stream_text(const char *text, size_t length, void *userdata)
+{
+    FILE *output = userdata == NULL ? stdout : (FILE *)userdata;
+
+    if (fwrite(text, 1U, length, output) != length || fflush(output) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static OttoExitCode handle_config_command(const OttoCliOptions *options)
 {
     char *path = NULL;
@@ -52,15 +62,27 @@ static OttoExitCode handle_config_command(const OttoCliOptions *options)
 
 static OttoExitCode handle_mode_command(const OttoCliOptions *options)
 {
+    char *base_prompt = NULL;
     char *system_prompt = NULL;
+    int base_found = 0;
     int found = 0;
     OttoExitCode code;
 
     if (options->mode == NULL) {
         code = otto_mode_set_active(NULL);
         if (code == OTTO_OK) {
-            puts("已清除当前模式，之后的 otto <问题> 将使用裸生成模式。");
+            puts("已清除当前附加模式，之后的 otto <问题> 将只使用统一系统提示词。");
         }
+        return code;
+    }
+
+    code = otto_mode_load("system", &base_prompt, &base_found);
+    if (code == OTTO_OK && !base_found) {
+        fprintf(stderr, "otto: 缺少统一系统提示词文件 system.md\n");
+        code = OTTO_ERR_CONFIG;
+    }
+    if (code != OTTO_OK) {
+        free(base_prompt);
         return code;
     }
 
@@ -76,6 +98,7 @@ static OttoExitCode handle_mode_command(const OttoCliOptions *options)
         printf("已切换到模式：%s\n", options->mode);
     }
 
+    free(base_prompt);
     free(system_prompt);
     return code;
 }
@@ -95,10 +118,13 @@ static OttoExitCode ask_question(
     char *prompt = NULL;
     char *endpoint = NULL;
     char *body = NULL;
+    char *base_prompt = NULL;
+    char *mode_prompt = NULL;
     char *system_prompt = NULL;
     char *active_mode = NULL;
     size_t body_length = 0U;
     int found = 0;
+    int base_prompt_found = 0;
     int active_mode_found = 0;
     int mode_found = 0;
     const char *selected_mode = NULL;
@@ -145,6 +171,16 @@ static OttoExitCode ask_question(
         goto cleanup;
     }
 
+    code = otto_mode_load("system", &base_prompt, &base_prompt_found);
+    if (code != OTTO_OK) {
+        goto cleanup;
+    }
+    if (!base_prompt_found) {
+        fprintf(stderr, "otto: 缺少统一系统提示词文件 system.md\n");
+        code = OTTO_ERR_CONFIG;
+        goto cleanup;
+    }
+
     if (!options->raw_mode) {
         selected_mode = options->mode;
         if (selected_mode == NULL) {
@@ -157,26 +193,33 @@ static OttoExitCode ask_question(
             }
         }
 
-        if (selected_mode == NULL) {
-            goto build_request;
-        }
-
-        code = otto_mode_load(
-            selected_mode,
-            &system_prompt,
-            &mode_found
-        );
-        if (code != OTTO_OK) {
-            goto cleanup;
-        }
-        if (!mode_found) {
-            fprintf(stderr, "otto: 指定模式没有可用的提示词文件\n");
-            code = OTTO_ERR_CONFIG;
-            goto cleanup;
+        if (selected_mode != NULL) {
+            code = otto_mode_load(
+                selected_mode,
+                &mode_prompt,
+                &mode_found
+            );
+            if (code != OTTO_OK) {
+                goto cleanup;
+            }
+            if (!mode_found) {
+                fprintf(stderr, "otto: 指定模式没有可用的提示词文件\n");
+                code = OTTO_ERR_CONFIG;
+                goto cleanup;
+            }
         }
     }
 
-build_request:
+    code = otto_mode_combine_prompts(
+        base_prompt,
+        options->raw_mode ? NULL : mode_prompt,
+        &system_prompt
+    );
+    if (code != OTTO_OK) {
+        fprintf(stderr, "otto: 无法组合系统提示词\n");
+        goto cleanup;
+    }
+
     code = otto_build_endpoint(config.baseurl, &endpoint);
     if (code != OTTO_OK) {
         goto cleanup;
@@ -186,6 +229,7 @@ build_request:
         config.model,
         system_prompt,
         prompt,
+        1,
         &body,
         &body_length
     );
@@ -205,6 +249,9 @@ build_request:
     request.apikey = config.apikey;
     request.body = body;
     request.body_length = body_length;
+    request.stream = 1;
+    request.stream_callback = write_stream_text;
+    request.stream_userdata = stdout;
     request.connect_timeout_ms = 15000L;
     request.timeout_ms = 120000L;
     request.max_response_size = OTTO_MAX_RESPONSE_BYTES;
@@ -223,12 +270,12 @@ build_request:
         goto cleanup;
     }
 
-    code = otto_json_parse_response(
-        response.body,
-        response.body_length,
-        &json_result
-    );
     if (response.http_status < 200L || response.http_status >= 300L) {
+        code = otto_json_parse_response(
+            response.body,
+            response.body_length,
+            &json_result
+        );
         if (json_result.error_message != NULL) {
             fprintf(
                 stderr,
@@ -247,6 +294,22 @@ build_request:
         goto cleanup;
     }
 
+    if (response.streamed) {
+        if ((!response.stream_ends_with_newline && fputc('\n', stdout) == EOF) ||
+            fflush(stdout) != 0) {
+            fprintf(stderr, "otto: 写入回答失败\n");
+            code = OTTO_ERR_API;
+            goto cleanup;
+        }
+        code = OTTO_OK;
+        goto cleanup;
+    }
+
+    code = otto_json_parse_response(
+        response.body,
+        response.body_length,
+        &json_result
+    );
     if (code != OTTO_OK) {
         fprintf(
             stderr,
@@ -283,6 +346,8 @@ cleanup:
     free(prompt);
     free(endpoint);
     free(body);
+    free(base_prompt);
+    free(mode_prompt);
     free(system_prompt);
     free(active_mode);
     otto_json_result_free(&json_result);
