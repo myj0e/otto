@@ -156,4 +156,3 @@ otto 总结这段文字 | tee answer.txt
 ```bash
 otto -- --help 是什么意思
 ```
-# otto

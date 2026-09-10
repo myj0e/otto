@@ -1,0 +1,5 @@
+/otto
+*.o
+core
+core.*
+*.tmp
