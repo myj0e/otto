@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Remove only resources recorded by scripts/install.sh.
+# Remove only resources recorded by scripts/install.sh or `make install`.
 # User API configuration, active mode state, and modified files are preserved.
 set -eu
 
@@ -92,7 +92,9 @@ fi
 [ -f "$manifest" ] || die "安装状态文件不是普通文件：$manifest"
 [ -r "$manifest" ] || die "无法读取安装状态文件：$manifest"
 
-[ "$(state_value version)" = 1 ] || die "无法识别安装状态文件：$manifest"
+manifest_version=$(state_value version)
+[ "$manifest_version" = 1 ] || [ "$manifest_version" = 2 ] ||
+    die "无法识别安装状态文件：$manifest"
 recorded_state_dir=$(state_value state_dir)
 [ "$recorded_state_dir" = "$state_dir" ] ||
     die '状态路径与安装记录不一致，请使用安装时的原路径'

@@ -12,10 +12,18 @@ trap cleanup EXIT INT TERM
 install_script="$test_root/scripts/install.sh"
 uninstall_script="$test_root/scripts/uninstall.sh"
 
+binary=${1:-"$test_root/target/release/otto"}
 fail() {
     printf 'install script test: %s\n' "$*" >&2
     exit 1
 }
+
+case "$binary" in
+    /*) binary_path=$binary ;;
+    *) binary_path="$test_root/$binary" ;;
+esac
+
+[ -x "$binary_path" ] || fail 'Rust release 可执行文件不存在，请先运行 make'
 
 prefix="$temporary_directory/prefix"
 config_dir="$temporary_directory/config"
@@ -26,13 +34,14 @@ printf '%s\n' 'user-api-config' >"$config_dir/config"
 printf '%s\n' 'user-owned-system-prompt' >"$config_dir/system.md"
 printf '%s\n' 'otto' >"$config_dir/active_mode"
 
-"$install_script" \
+OTTO_INSTALL_BINARY="$binary_path" "$install_script" \
     --prefix "$prefix" \
     --config-dir "$config_dir" \
     --state-dir "$state_dir" \
     >"$temporary_directory/install-output"
 
 test -x "$prefix/bin/otto" || fail '可执行文件未安装'
+test "$("$prefix/bin/otto" --version)" = 'otto 1.0.0' || fail '安装的不是正式 Rust 版本'
 test -f "$config_dir/otto.md" || fail 'otto.md 未安装'
 test -f "$config_dir/jarvis.md" || fail 'jarvis.md 未安装'
 test -f "$config_dir/system.md" || fail '已有 system.md 被删除'
@@ -42,6 +51,17 @@ test "$(cat "$config_dir/system.md")" = 'user-owned-system-prompt'
 test "$(cat "$config_dir/config")" = 'user-api-config'
 test "$(cat "$config_dir/active_mode")" = 'otto'
 test -f "$state_dir/install.manifest" || fail '安装状态未记录'
+rg -q '^version=2$' "$state_dir/install.manifest" || fail '安装状态不是 v2'
+
+# A v1 manifest from the C-era installer must be accepted and upgraded in
+# place. The paths and ownership records use the same fields.
+sed -i 's/^version=2$/version=1/' "$state_dir/install.manifest"
+OTTO_INSTALL_BINARY="$binary_path" "$install_script" \
+    --prefix "$prefix" \
+    --config-dir "$config_dir" \
+    --state-dir "$state_dir" \
+    >"$temporary_directory/upgrade-output"
+rg -q '^version=2$' "$state_dir/install.manifest" || fail 'v1 清单未升级为 v2'
 
 "$uninstall_script" --state-dir "$state_dir" >"$temporary_directory/uninstall-output"
 
@@ -56,7 +76,7 @@ test ! -e "$state_dir/install.manifest" || fail '安装状态未清理'
 modified_prefix="$temporary_directory/modified-prefix"
 modified_config="$temporary_directory/modified-config"
 modified_state="$temporary_directory/modified-state"
-"$install_script" \
+OTTO_INSTALL_BINARY="$binary_path" "$install_script" \
     --prefix "$modified_prefix" \
     --config-dir "$modified_config" \
     --state-dir "$modified_state" \
@@ -82,7 +102,7 @@ collision_state="$temporary_directory/collision-state"
 mkdir -p "$collision_prefix/bin"
 printf '%s\n' 'pre-existing-otto' >"$collision_prefix/bin/otto"
 
-if "$install_script" \
+if OTTO_INSTALL_BINARY="$binary_path" "$install_script" \
     --prefix "$collision_prefix" \
     --config-dir "$collision_config" \
     --state-dir "$collision_state" \

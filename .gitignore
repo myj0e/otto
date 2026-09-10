@@ -1,5 +1,8 @@
 /otto
+/build/
 *.o
 core
 core.*
 *.tmp
+/target/
+/rust/otto/target/
