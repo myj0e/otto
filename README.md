@@ -16,6 +16,7 @@ otto 请用一句话解释什么是 TCP
 ## TODO
 
 - [ ] 添加 Agent 工具调用能力：在回答前根据问题调用合适的工具，逐步扩展为支持生成文件等任务的单轮 Agent 会话。
+- [ ] 添加音频模式：支持语音输出，输出 OTTO 的“活字印刷”语音。
 
 ## 系统提示词与语气模式
 
@@ -27,6 +28,7 @@ otto 请用一句话解释什么是 TCP
 mkdir -p ~/.config/otto
 cp system.md ~/.config/otto/system.md
 cp otto.md ~/.config/otto/otto.md
+cp jarvis.md ~/.config/otto/jarvis.md
 ```
 
 模式文件与配置文件放在同一个目录中：
@@ -51,6 +53,14 @@ otto 你好
 
 ```bash
 otto --mode test
+otto 你好
+```
+
+项目中也提供了 JARVIS 模式，复制后即可启用：
+
+```bash
+cp jarvis.md ~/.config/otto/jarvis.md
+otto --mode jarvis
 otto 你好
 ```
 
