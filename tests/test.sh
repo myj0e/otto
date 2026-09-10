@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-binary=${1:-./otto}
+binary=${1:-./target/release/otto}
 test_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/otto-test.XXXXXX")
 server_pid=""

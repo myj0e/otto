@@ -1,0 +1,363 @@
+use std::env;
+use std::fs::{self, File};
+use std::io::{self, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
+
+use tempfile::NamedTempFile;
+
+use crate::error::{OttoError, Result};
+
+pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
+pub const DEFAULT_NAME: &str = "Openai";
+pub const DEFAULT_BASEURL: &str = "https://api.openai.com";
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub name: Option<String>,
+    pub baseurl: Option<String>,
+    pub apikey: Option<String>,
+    pub model: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            name: None,
+            baseurl: None,
+            apikey: None,
+            model: DEFAULT_MODEL.to_owned(),
+        }
+    }
+}
+
+fn path_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+pub fn config_dir() -> Result<PathBuf> {
+    if let Ok(override_path) = env::var("OTTO_CONFIG") {
+        if !override_path.is_empty() {
+            return Ok(Path::new(&override_path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf());
+        }
+    }
+
+    if let Ok(config_home) = env::var("XDG_CONFIG_HOME") {
+        if !config_home.is_empty() {
+            return Ok(PathBuf::from(config_home).join("otto"));
+        }
+    }
+
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .ok_or_else(|| OttoError::Config("无法确定当前用户的 home 目录".to_owned()))?;
+    Ok(PathBuf::from(home).join(".config").join("otto"))
+}
+
+pub fn config_path() -> Result<PathBuf> {
+    if let Ok(override_path) = env::var("OTTO_CONFIG") {
+        if !override_path.is_empty() {
+            return Ok(PathBuf::from(override_path));
+        }
+    }
+    Ok(config_dir()?.join("config"))
+}
+
+pub fn load(path: &Path) -> Result<(Config, bool)> {
+    let mut config = Config::default();
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((config, false)),
+        Err(error) => {
+            return Err(OttoError::Config(format!(
+                "无法读取配置文件 {}：{error}",
+                path.display()
+            )))
+        }
+    };
+
+    let mut content = String::new();
+    file.read_to_string(&mut content).map_err(|error| {
+        OttoError::Config(format!("读取配置文件 {} 失败：{error}", path.display()))
+    })?;
+
+    for (line_number, line) in content.lines().enumerate() {
+        let entry = line.trim();
+        if entry.is_empty() || entry.starts_with('#') {
+            continue;
+        }
+
+        let (key, value) = entry.split_once('=').ok_or_else(|| {
+            OttoError::Config(format!(
+                "配置文件 {} 第 {} 行格式错误",
+                path.display(),
+                line_number + 1
+            ))
+        })?;
+        let key = key.trim();
+        let value = value.trim().to_owned();
+
+        match key {
+            "name" => config.name = Some(value),
+            "baseurl" => config.baseurl = Some(value),
+            "apikey" => config.apikey = Some(value),
+            "model" => config.model = value,
+            _ => {}
+        }
+    }
+
+    Ok((config, true))
+}
+
+fn valid_baseurl(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let host = if lower.starts_with("https://") {
+        &value[8..]
+    } else if lower.starts_with("http://") {
+        &value[7..]
+    } else {
+        return false;
+    };
+
+    !host.is_empty()
+        && !host.starts_with('/')
+        && !value.contains('?')
+        && !value.contains('#')
+        && !value.chars().any(char::is_whitespace)
+}
+
+pub fn validate(config: &Config) -> Result<()> {
+    if config.name.as_deref().unwrap_or_default().is_empty() {
+        return Err(OttoError::Config("name 不能为空".to_owned()));
+    }
+    if !valid_baseurl(config.baseurl.as_deref().unwrap_or_default()) {
+        return Err(OttoError::Config(
+            "baseurl 不是有效的 HTTP/HTTPS 地址".to_owned(),
+        ));
+    }
+    if config.apikey.as_deref().unwrap_or_default().is_empty() {
+        return Err(OttoError::Config("apikey 不能为空".to_owned()));
+    }
+    if config.model.is_empty() {
+        return Err(OttoError::Config("model 不能为空".to_owned()));
+    }
+    if [
+        config.name.as_deref().unwrap_or_default(),
+        config.baseurl.as_deref().unwrap_or_default(),
+        config.apikey.as_deref().unwrap_or_default(),
+        config.model.as_str(),
+    ]
+    .iter()
+    .any(|value| value.contains('\n') || value.contains('\r'))
+    {
+        return Err(OttoError::Config("配置项不能包含换行符".to_owned()));
+    }
+    Ok(())
+}
+
+fn set_private_permissions(file: &File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+pub fn write_private_atomic(path: &Path, content: &str) -> Result<()> {
+    let directory = path_parent(path);
+    fs::create_dir_all(directory).map_err(|error| {
+        OttoError::Config(format!("无法创建配置目录 {}：{error}", directory.display()))
+    })?;
+
+    let temporary = NamedTempFile::new_in(directory)
+        .map_err(|error| OttoError::Config(format!("无法创建临时配置文件：{error}")))?;
+    set_private_permissions(temporary.as_file())?;
+    temporary.as_file().write_all(content.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| {
+        OttoError::Config(format!("保存文件 {} 失败：{}", path.display(), error.error))
+    })?;
+    Ok(())
+}
+
+pub fn save_atomic(path: &Path, config: &Config) -> Result<()> {
+    validate(config)?;
+    let content = format!(
+        "# OTTO (One-time.Talk once) configuration\nname={}\nbaseurl={}\napikey={}\nmodel={}\n",
+        config.name.as_deref().unwrap_or_default(),
+        config.baseurl.as_deref().unwrap_or_default(),
+        config.apikey.as_deref().unwrap_or_default(),
+        config.model
+    );
+    write_private_atomic(path, &content)
+}
+
+pub fn save_values(
+    path: &Path,
+    name: &str,
+    baseurl: &str,
+    apikey: &str,
+    model: Option<&str>,
+) -> Result<()> {
+    let config = Config {
+        name: Some(name.to_owned()),
+        baseurl: Some(baseurl.to_owned()),
+        apikey: Some(apikey.to_owned()),
+        model: model.unwrap_or(DEFAULT_MODEL).to_owned(),
+    };
+    save_atomic(path, &config)
+}
+
+fn read_line(prompt: &str, default: Option<&str>) -> Result<String> {
+    match default.filter(|value| !value.is_empty()) {
+        Some(value) => print!("{prompt} [{value}]: "),
+        None => print!("{prompt}: "),
+    }
+    io::stdout().flush()?;
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    if line.is_empty() {
+        return Err(OttoError::Config("配置输入已结束".to_owned()));
+    }
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        Ok(default.unwrap_or_default().to_owned())
+    } else {
+        Ok(trimmed.to_owned())
+    }
+}
+
+#[cfg(unix)]
+fn read_secret_from_terminal() -> io::Result<String> {
+    use std::os::fd::AsRawFd;
+
+    let stdin = io::stdin();
+    let fd = stdin.as_raw_fd();
+    let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
+    if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let original = unsafe { original.assume_init() };
+    let mut hidden = original;
+    hidden.c_lflag &= !(libc::ECHO | libc::ECHONL);
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &hidden) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Configure the terminal before printing the prompt so fast pseudo-
+    // terminal writers cannot leak the secret between those two operations.
+    let read_result = (|| {
+        print!("API Key: ");
+        io::stdout().flush()?;
+        let mut line = String::new();
+        stdin.read_line(&mut line)?;
+        Ok(line)
+    })();
+    let restore_result = unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+    if restore_result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    println!();
+    read_result.map(|line| line.trim_end_matches(['\n', '\r']).to_owned())
+}
+
+fn read_secret(default: Option<&str>) -> Result<String> {
+    let secret = {
+        #[cfg(unix)]
+        {
+            read_secret_from_terminal()
+        }
+        #[cfg(not(unix))]
+        {
+            rpassword::prompt_password("API Key: ")
+        }
+    }
+    .map_err(|error| OttoError::Config(format!("读取 API Key 失败：{error}")))?;
+    if secret.is_empty() {
+        Ok(default.unwrap_or_default().to_owned())
+    } else {
+        Ok(secret)
+    }
+}
+
+fn confirm(prompt: &str) -> Result<bool> {
+    loop {
+        print!("{prompt} [Y/n]: ");
+        io::stdout().flush()?;
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => println!("请输入 y 或 n。"),
+        }
+    }
+}
+
+fn print_masked_key(apikey: &str) {
+    if apikey.is_empty() {
+        println!("  API Key: <empty>");
+    } else if apikey.chars().count() <= 8 {
+        println!("  API Key: ********");
+    } else {
+        let characters: Vec<char> = apikey.chars().collect();
+        let prefix: String = characters.iter().take(4).collect();
+        let suffix: String = characters.iter().rev().take(4).rev().collect();
+        println!("  API Key: {}****{}", prefix, suffix);
+    }
+}
+
+pub fn interactive(path: &Path) -> Result<()> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(OttoError::Config(
+            "--config 需要在交互式终端中运行".to_owned(),
+        ));
+    }
+
+    let (mut config, _) = load(path)?;
+    let name = read_line("Name", Some(config.name.as_deref().unwrap_or(DEFAULT_NAME)))?;
+    let baseurl = read_line(
+        "Base URL",
+        Some(config.baseurl.as_deref().unwrap_or(DEFAULT_BASEURL)),
+    )?;
+
+    let apikey = loop {
+        let value = read_secret(config.apikey.as_deref())?;
+        if !value.is_empty() {
+            break value;
+        }
+        println!("API Key 不能为空，请重新输入。");
+    };
+    let model = read_line("Model", Some(&config.model))?;
+
+    config.name = Some(name);
+    config.baseurl = Some(baseurl);
+    config.apikey = Some(apikey);
+    config.model = model;
+    validate(&config)?;
+
+    println!();
+    println!("配置摘要：");
+    println!("  Name: {}", config.name.as_deref().unwrap_or_default());
+    println!(
+        "  Base URL: {}",
+        config.baseurl.as_deref().unwrap_or_default()
+    );
+    print_masked_key(config.apikey.as_deref().unwrap_or_default());
+    println!("  Model: {}", config.model);
+
+    if confirm("保存配置")? {
+        save_atomic(path, &config)?;
+        println!("配置已保存到 {}", path.display());
+    } else {
+        println!("配置未保存。");
+    }
+    Ok(())
+}

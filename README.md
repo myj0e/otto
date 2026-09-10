@@ -11,11 +11,37 @@
 
 ## 项目简介
 
-OTTO 是一个使用 C11 与 libcurl 实现的命令行大模型问答工具，面向可以通过一次请求直接完成的简单问题。
+OTTO 是一个面向 CLI 环境的单轮大模型 Agent 工具，适合用一句话解决一个明确问题。
+当前正式实现使用 Rust，网络层采用 reqwest；早期的 C11/libcurl 实现作为 v0.1 基线保留。
 
 项目名称采用品牌化表达，强调“一次提问、一次完成”的使用方式。OTTO 不维护跨请求的会话历史，每次调用都独立生成回答。
 
+## 当前版本
+
+当前正式版本为 Rust `1.0.0`：普通问答默认进入 Agent loop，模型可以按需调用本地
+文件工具、websearch 和 webfetch。C11/libcurl 的 v0.1 基线通过
+[`docs/legacy/c-v0.1.md`](docs/legacy/c-v0.1.md)、`c-v0.1.0` tag 和
+`legacy/c-v0.1` 分支留档；迁移记录见 [`docs/migration/rust.md`](docs/migration/rust.md)。
+
+正式构建入口：
+
+```bash
+make
+target/release/otto --help
+target/release/otto 你好
+```
+
+C 基线仍可以显式构建和回归测试，不会覆盖 Rust 的 `otto`：
+
+```bash
+make c-build
+build/c/otto-c --help
+make c-test
+```
+
 ## 核心特性
+
+正式 Rust 版本的 Agent 默认隐式启用；C v0.1 基线只保留单轮 Chat 能力。
 
 | 能力 | 说明 |
 | --- | --- |
@@ -24,7 +50,8 @@ OTTO 是一个使用 C11 与 libcurl 实现的命令行大模型问答工具，�
 | 流式输出 | 默认使用 OpenAI Chat Completions 兼容接口的 SSE 流式响应，生成内容会即时输出。 |
 | 服务兼容 | 支持 OpenAI Chat Completions 兼容服务，包括 OpenAI、SiliconFlow 等。 |
 | 提示词模式 | 每次必加载统一系统提示词，并可附加一个可持久化的语气模式。 |
-| 用户级安装 | 提供不修改 Shell 配置、保护已有用户配置的安装与卸载脚本。 |
+| Agent 工具 | 默认按需调用 Glob、Grep、Read、Edit、Write、websearch 和 webfetch。 |
+| 用户级安装 | 通过 Makefile 统一安装和卸载，不修改 Shell 配置并保护已有用户配置。 |
 
 ## 命令速查
 
@@ -39,6 +66,8 @@ OTTO 是一个使用 C11 与 libcurl 实现的命令行大模型问答工具，�
 | `otto --mode` | 清除默认模式，恢复裸生成模式。 |
 | `otto --mode <模式> <问题内容...>` | 仅本次请求附加指定模式，不修改默认模式。 |
 | `otto --mode -- <问题内容...>` | 仅本次请求不附加可选模式。 |
+| `otto --root <目录> <问题内容...>` | 设置本轮 Agent 的 workspace 根目录。 |
+| `otto --no-agent <问题内容...>` | 本次请求跳过工具调用，只发送普通 Chat 请求。 |
 
 ## 快速开始
 
@@ -46,11 +75,11 @@ OTTO 是一个使用 C11 与 libcurl 实现的命令行大模型问答工具，�
 
 ```bash
 make
-./otto --config
-./otto 你好
+target/release/otto --config
+target/release/otto 你好
 ```
 
-如果已经完成当前用户安装，将上面的 `./otto` 替换为 `otto` 即可。
+如果已经完成当前用户安装，将上面的 `target/release/otto` 替换为 `otto` 即可。
 
 ## 提示词与模式
 
@@ -134,11 +163,35 @@ otto --mode -- 你好
 
 程序默认发送 `"stream": true`，并解析 `data:` SSE 事件。兼容 OpenAI Chat Completions 流式接口的服务可以直接使用，例如 SiliconFlow，不需要增加命令行参数。
 
+## Agent 与工具
+
+OTTO 默认使用 Agent loop，可使用以下工具：glob 查找 workspace 内的文件，grep 搜索
+workspace 内的文本，read 读取 UTF-8 文本，edit 精确替换文本并返回 diff，write
+创建或覆盖文本文件，websearch 检索互联网信息，webfetch 抓取公开网页并提取正文。
+
+本地文件工具只能访问当前 workspace 的相对路径，拒绝路径穿越和逃逸到 workspace 外的
+符号链接。read、grep、glob 在访问本地内容前会请求读取授权；edit 和 write 会请求
+写入授权。授权选择为：1 仅此次、2 本轮同类操作总是允许、3 拒绝。授权提示会根据
+当前 mode 使用对应语气。
+
+websearch 不会默认调用 Google，而是通过 provider 适配层工作。当前支持 Brave Search
+和 SearXNG：
+
+    # Brave Search
+    export OTTO_SEARCH_PROVIDER=brave
+    export OTTO_SEARCH_API_KEY=...
+
+    # 或自建/可信的 SearXNG
+    export OTTO_SEARCH_PROVIDER=searxng
+    export OTTO_SEARCH_URL=https://your-searxng.example/search
+
+webfetch 只允许 HTTP/HTTPS，限制响应大小和重定向次数，并拒绝本地、内网和解析到内网
+地址的主机；网页内容会以不可信工具数据交给模型。
+
 ## 构建环境
 
-- C11 编译器
-- libcurl 开发库
-- pkg-config
+- Rust 工具链（正式构建需要）
+- C11 编译器、libcurl 开发库和 pkg-config（仅 `c-build` / `c-test` 需要）
 
 Ubuntu/Debian 示例：
 
@@ -153,12 +206,15 @@ make
 make test
 ```
 
+`make test` 会先测试正式 Rust 版本，再运行 C 基线回归；也可以分别执行
+`make rust-test`、`make rust-functional-test` 和 `make c-test`。
+
 ## 安装与卸载
 
-推荐使用脚本安装到当前用户，不需要 `sudo`：
+推荐使用 Makefile 安装到当前用户，不需要 `sudo`：
 
 ```bash
-./scripts/install.sh
+make install
 ```
 
 默认安装位置：
@@ -169,34 +225,30 @@ make test
 安装状态：~/.local/state/otto/install.manifest
 ```
 
-安装脚本会自动编译缺失的 `otto` 可执行文件；已有 API 配置、已有模式文件和当前激活模式都不会被覆盖。它也不会修改 `.bashrc` 等 Shell 配置文件，如果 `~/.local/bin` 不在 `PATH` 中，脚本只会给出提示。
+安装脚本会自动编译缺失的 Rust release 可执行文件；已有 API 配置、已有模式文件和当前激活模式都不会被覆盖。它也不会修改 `.bashrc` 等 Shell 配置文件，如果 `~/.local/bin` 不在 `PATH` 中，脚本只会给出提示。
 
 卸载时执行：
 
 ```bash
-./scripts/uninstall.sh
+make uninstall
 ```
+
+`make install` 和 `make uninstall` 是正式生命周期入口。原有的
+`scripts/install.sh`、`scripts/uninstall.sh` 仍然保留，供旧脚本和自动化流程直接调用。
 
 卸载脚本只处理安装清单中由安装脚本创建、且内容没有被修改的可执行文件和提示词。用户后来修改过的文件、已有的 `config` API 配置文件和 `active_mode` 会被保留；因此卸载不会破坏现有环境。
 
-安装和卸载都支持自定义状态目录。安装时如果使用了 `--state-dir`，卸载时需要使用同一个路径：
+安装和卸载都支持通过 Make 变量自定义路径。安装时如果使用了 `STATE_DIR`，卸载时需要使用同一个路径：
 
 ```bash
-./scripts/install.sh --prefix ~/.local --config-dir ~/.config/otto --state-dir ~/.local/state/otto
-./scripts/uninstall.sh --state-dir ~/.local/state/otto
+make install PREFIX="$HOME/.local" CONFIG_DIR="$HOME/.config/otto" STATE_DIR="$HOME/.local/state/otto"
+make uninstall STATE_DIR="$HOME/.local/state/otto"
 ```
 
-安装到 `/usr/local/bin`：
-
-```bash
-sudo make install
-```
-
-也可以指定安装目录：
-
-```bash
-make install PREFIX="$HOME/.local"
-```
+不设置 `PREFIX`、`CONFIG_DIR`、`STATE_DIR` 时，安装脚本分别使用当前用户的
+`~/.local`、XDG 配置目录和 XDG 状态目录；不会修改 `.bashrc` 等 Shell 配置，也不会
+覆盖已有 API 配置、active_mode 或用户修改过的提示词。安装清单 v2 兼容旧 v1 清单，
+升级时会先校验原文件并支持失败回滚。
 
 ## 服务配置
 
@@ -278,10 +330,13 @@ otto -- --help 是什么意思
 
 ```text
 .
-├── src/                  C 源码
-├── include/otto/         公共头文件
+├── src/                  C v0.1 基线源码
+├── include/otto/         C 基线公共头文件
+├── build/c/              C 基线构建产物（忽略）
 ├── tests/                功能与安装脚本测试
-├── scripts/              当前用户安装与卸载脚本
+├── scripts/              安装与卸载兼容入口
+├── rust/otto/            正式 Rust CLI 与 Agent
+├── docs/                 C 基线和 Rust 迁移记录
 ├── assets/               项目 Logo 等静态资源
 ├── system.md             统一系统提示词
 ├── otto.md               OTTO 语气模式
@@ -292,5 +347,6 @@ otto -- --help 是什么意思
 
 ## 路线图
 
-- [ ] 添加 Agent 工具调用能力：在回答前根据问题调用合适的工具，逐步扩展为支持生成文件等任务的单轮 Agent 会话。
+- [x] Rust 正式入口、默认 Agent loop、文件工具、websearch 和 webfetch。
+- [x] Makefile 统一安装、卸载和 v1 → v2 安全升级路径。
 - [ ] 添加音频模式：支持语音输出，输出 OTTO 的“活字印刷”语音。

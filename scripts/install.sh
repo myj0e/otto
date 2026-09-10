@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Install OTTO for the current user.
+# Install the maintained Rust OTTO binary for the current user.
 # Existing API configuration and user-owned prompt files are never overwritten.
 set -eu
 
@@ -30,6 +30,9 @@ usage() {
 
 也可以使用 OTTO_INSTALL_PREFIX、OTTO_INSTALL_CONFIG_DIR、
 OTTO_INSTALL_STATE_DIR 环境变量指定路径。
+
+默认安装 target/release/otto；也可以通过 OTTO_INSTALL_BINARY 指定已经构建的
+兼容二进制。推荐使用 make install 调用此脚本。
 EOF
 }
 
@@ -208,6 +211,13 @@ bin_dir="$prefix/bin"
 binary="$bin_dir/otto"
 manifest="$state_dir/install.manifest"
 
+binary_source=${OTTO_INSTALL_BINARY-}
+if [ -z "$binary_source" ]; then
+    binary_source="$project_root/target/release/otto"
+else
+    binary_source=$(absolute_path "$binary_source")
+fi
+
 [ -n "$prefix" ] || die '安装前缀不能为空'
 [ -n "$config_dir" ] || die '配置目录不能为空'
 [ -n "$state_dir" ] || die '状态目录不能为空'
@@ -233,12 +243,14 @@ manifest_exists=0
 
 trap cleanup EXIT
 
-if [ ! -x "$project_root/otto" ]; then
+if [ ! -x "$binary_source" ]; then
     command -v make >/dev/null 2>&1 || die '找不到可执行文件，也找不到 make'
-    info '未找到构建结果，正在编译 OTTO'
-    make -C "$project_root" || die '编译失败'
+    info '未找到 Rust release 构建结果，正在编译 OTTO'
+    make -C "$project_root" rust-build || die '编译失败'
 fi
-[ -x "$project_root/otto" ] || die "找不到可执行文件：$project_root/otto"
+[ -x "$binary_source" ] || die "找不到可执行文件：$binary_source"
+[ -f "$binary_source" ] || die "可执行文件不是普通文件：$binary_source"
+[ ! -L "$binary_source" ] || die "可执行文件是符号链接：$binary_source"
 
 for prompt_name in system otto jarvis; do
     [ -f "$project_root/$prompt_name.md" ] ||
@@ -260,7 +272,9 @@ elif [ -e "$manifest" ]; then
     [ -f "$manifest" ] || die "安装状态文件不是普通文件：$manifest"
     [ -r "$manifest" ] || die "无法读取安装状态文件：$manifest"
     manifest_exists=1
-    [ "$(state_value version)" = 1 ] || die "无法识别安装状态文件：$manifest"
+    manifest_version=$(state_value version)
+    [ "$manifest_version" = 1 ] || [ "$manifest_version" = 2 ] ||
+        die "无法识别安装状态文件：$manifest"
     [ "$(state_value binary)" = "$binary" ] ||
         die '安装路径与已有安装状态不一致，请使用原路径卸载或显式指定相同路径'
     [ "$(state_value config_dir)" = "$config_dir" ] ||
@@ -306,7 +320,7 @@ fi
 
 temporary_binary=$(mktemp "$bin_dir/.otto-install.XXXXXX") ||
     die '无法创建可执行文件临时文件'
-install -m 0755 -- "$project_root/otto" "$temporary_binary" ||
+install -m 0755 -- "$binary_source" "$temporary_binary" ||
     die '无法准备可执行文件'
 binary_checksum=$(file_checksum "$temporary_binary")
 mv -f -- "$temporary_binary" "$binary" || die '无法原子安装可执行文件'
@@ -387,8 +401,9 @@ done
 temporary_manifest=$(mktemp "$state_dir/.install-manifest.XXXXXX") ||
     die '无法创建安装状态临时文件'
 {
-    printf '%s\n' '# OTTO user installation manifest v1'
-    printf 'version=1\n'
+    printf '%s\n' '# OTTO user installation manifest v2'
+    printf 'version=2\n'
+    printf 'binary_kind=rust-release\n'
     printf 'binary=%s\n' "$binary"
     printf 'config_dir=%s\n' "$config_dir"
     printf 'state_dir=%s\n' "$state_dir"
