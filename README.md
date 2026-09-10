@@ -1,5 +1,9 @@
 # OTTO
 
+<p align="center">
+  <img src="assets/otto-logo.png" alt="OTTO 像素风 Logo：轮椅冲刺并发出单轮对话气泡" width="240">
+</p>
+
 OTTO（**One-time.Talk once**）是一个面向 CLI 的单轮大模型问答工具。
 
 它适合解决一次对话即可完成的简单问题：
