@@ -55,7 +55,8 @@ otto-cli
   │   └── webfetch
   └── providers
       ├── brave
-      └── searxng
+      ├── searxng
+      └── tavily
 ```
 
 工具通过统一接口注册：
@@ -159,6 +160,8 @@ Glob → Grep → Read → 权限 → edit → write → hash/diff/atomic write
 - 定义 `SearchProvider` trait。
 - 实现 Brave provider。
 - 实现 SearXNG provider。
+- 实现 Tavily provider，并默认使用 `basic` 搜索深度控制额度消耗。
+- 由原生 `otto` 读取 `search.env`，不依赖 shell 启动器传递配置。
 - 统一搜索结果结构。
 - 保存当前会话的 `search_result_id` 到 URL 映射。
 

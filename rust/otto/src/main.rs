@@ -115,8 +115,11 @@ async fn ask(options: &CliOptions) -> Result<()> {
     let endpoint = build_endpoint(config.baseurl.as_deref().unwrap_or_default())?;
 
     if !options.no_agent {
+        let search_config_path = config::search_config_path()?;
+        let (search_config, _) = config::load_search(&search_config_path)?;
         return agent::run(
             &config,
+            &search_config,
             &endpoint,
             &system_prompt,
             &question,
