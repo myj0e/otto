@@ -1,299 +1,213 @@
-# OTTO
-
 <p align="center">
-  <img src="assets/otto-logo.png" alt="OTTO 像素风 Logo：轮椅冲刺并发出单轮对话气泡" width="240">
+  <img src="assets/otto-logo.png" alt="OTTO Logo" width="240">
+  <div style="text-align:center; font-weight:bold; font-size:2.5rem;">
+    One Time. Talk Once.
+  </div>
+
 </p>
 
-<p align="center">
-  <strong>One-time.Talk once</strong><br>
-  面向 CLI 环境的单轮大模型问答工具
-</p>
+OTTO 是一个运行在终端里的 AI 助手。你可以直接用自然语言提问，让它回答问题、解释代码、分析当前项目、处理文件，并在配置后搜索和阅读网页。
 
-## 项目简介
+它适合快速完成一个明确的任务：每次命令都是独立请求，不会自动混入上一次调用的内容。需要读取或修改本地文件时，OTTO 会在相应操作前请求授权。
 
-OTTO 是一个面向 CLI 环境的单轮大模型 Agent 工具，适合用一句话解决一个明确问题。
-当前正式实现使用 Rust，网络层采用 reqwest；早期的 C11/libcurl 实现作为 v0.1 基线保留。
+## 你可以用 OTTO 做什么
 
-项目名称采用品牌化表达，强调“一次提问、一次完成”的使用方式。OTTO 不维护跨请求的会话历史，每次调用都独立生成回答。
-
-## 当前版本
-
-当前正式版本为 Rust `1.0.0`：普通问答默认进入 Agent loop，模型可以按需调用本地
-文件工具、websearch 和 webfetch。C11/libcurl 的 v0.1 基线通过
-[`docs/legacy/c-v0.1.md`](docs/legacy/c-v0.1.md)、`c-v0.1.0` tag 和
-`legacy/c-v0.1` 分支留档；迁移记录见 [`docs/migration/rust.md`](docs/migration/rust.md)。
-
-正式构建入口：
-
-```bash
-make
-target/release/otto --help
-target/release/otto 你好
-```
-
-C 基线仍可以显式构建和回归测试，不会覆盖 Rust 的 `otto`：
-
-```bash
-make c-build
-build/c/otto-c --help
-make c-test
-```
-
-## 核心特性
-
-正式 Rust 版本的 Agent 默认隐式启用；C v0.1 基线只保留单轮 Chat 能力。
-
-| 能力 | 说明 |
-| --- | --- |
-| 简洁调用 | 直接使用 `otto <问题内容...>` 发起单轮问答。 |
-| 参数拼接 | 程序会将问题参数按单个空格重新拼接，包含空格的问题通常不需要加引号。 |
-| 流式输出 | 默认使用 OpenAI Chat Completions 兼容接口的 SSE 流式响应，生成内容会即时输出。 |
-| 服务兼容 | 支持 OpenAI Chat Completions 兼容服务，包括 OpenAI、SiliconFlow 等。 |
-| 提示词模式 | 每次必加载统一系统提示词，并可附加一个可持久化的语气模式。 |
-| Agent 工具 | 默认按需调用 Glob、Grep、Read、Edit、Write、websearch 和 webfetch。 |
-| 用户级安装 | 通过 Makefile 统一安装和卸载，不修改 Shell 配置并保护已有用户配置。 |
-
-## 命令速查
-
-| 命令 | 作用 |
-| --- | --- |
-| `otto <问题内容...>` | 使用当前已保存模式发起问答。 |
-| `otto --help` | 显示命令帮助。 |
-| `otto --version` | 显示版本号。 |
-| `otto --config` | 进入交互式配置界面。 |
-| `otto --config --name ... --baseurl ... --apikey ...` | 使用命令行参数保存服务配置。 |
-| `otto --mode <模式>` | 设置并保存默认模式。 |
-| `otto --mode` | 清除默认模式，恢复裸生成模式。 |
-| `otto --mode <模式> <问题内容...>` | 仅本次请求附加指定模式，不修改默认模式。 |
-| `otto --mode -- <问题内容...>` | 仅本次请求不附加可选模式。 |
-| `otto --root <目录> <问题内容...>` | 设置本轮 Agent 的 workspace 根目录。 |
-| `otto --no-agent <问题内容...>` | 本次请求跳过工具调用，只发送普通 Chat 请求。 |
+- 解释报错、命令和代码，帮助定位问题。
+- 阅读当前项目中的文件，查找相关代码并总结结构。
+- 在获得授权后创建、修改或整理文件。
+- 配置联网搜索，查找最新资料、文档和网页内容。
+- 通过不同的模式调整回答风格，例如技术评审、简洁回答或角色化表达。
+- 将回答直接交给其他命令或脚本继续处理。
 
 ## 快速开始
 
-完成依赖安装后，可以直接编译、配置并发起第一条请求：
+### 1. 安装依赖
+
+OTTO 需要 Rust 工具链和 `make`。如果还没有 Rust，可以使用 rustup 安装：
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"
+```
+
+### 2. 编译并安装
+
+在 OTTO 项目目录中执行：
 
 ```bash
 make
-target/release/otto --config
-target/release/otto 你好
-```
-
-如果已经完成当前用户安装，将上面的 `target/release/otto` 替换为 `otto` 即可。
-
-## 提示词与模式
-
-所有请求都会加载 `system.md` 作为统一系统提示词；文件缺失时请求会失败。模式提示词是可选附加项，每次最多选择一个。
-
-最终发送给模型的系统提示词按以下顺序组合：
-
-```text
-system.md
-+ <模式>.md（如果选择了模式）
-```
-
-源码目录中提供了 `system.md`、`otto.md` 与 `jarvis.md` 示例。直接从源码目录运行时，如果配置目录没有 `system.md` 或 `otto.md`，程序会回退读取项目根目录中的对应文件；安装后建议将提示词复制到配置目录：
-
-```bash
-mkdir -p ~/.config/otto
-cp system.md ~/.config/otto/system.md
-cp otto.md ~/.config/otto/otto.md
-cp jarvis.md ~/.config/otto/jarvis.md
-```
-
-默认情况下，模式文件、统一系统提示词和当前模式状态位于同一个目录：
-
-```text
-~/.config/otto/system.md
-~/.config/otto/otto.md
-~/.config/otto/test.md
-~/.config/otto/active_mode
-```
-
-其中 `system.md` 是必需文件，`otto.md`、`jarvis.md`、`test.md` 等是可选模式文件。新增模式时，只需在该目录创建同名的 `<模式>.md` 文件：
-
-```bash
-vi ~/.config/otto/test.md
-otto --mode test
-```
-
-模式名称仅支持字母、数字、`-`、`_` 和 `.`。
-
-先选择模式，选择结果会保存下来，之后普通的 `otto <问题>` 会自动使用它：
-
-```bash
-otto --mode otto
-otto 你好
-```
-
-`otto --mode otto` 会保存 `otto` 模式；之后每次普通请求都会把 `system.md` 与 `otto.md` 合并后作为 system prompt。其他模式同理：
-
-```bash
-otto --mode test
-otto 你好
-```
-
-项目中也提供了 JARVIS 模式，复制后即可启用：
-
-```bash
-cp jarvis.md ~/.config/otto/jarvis.md
-otto --mode jarvis
-otto 你好
-```
-
-清除已保存的附加模式，只保留统一 `system.md`：
-
-```bash
-otto --mode
-otto 你好
-```
-
-也可以只对当前请求临时指定模式或不附加模式，且不会改变已保存的模式：
-
-```bash
-otto --mode test 你好
-otto --mode -- 你好
-```
-
-上面的 `otto --mode -- 你好` 仍然会加载 `system.md`，只是本次不附加任何模式提示词。
-
-通过 `OTTO_MODE_DIR` 可以指定提示词文件的读取目录。当前激活模式 `active_mode` 仍保存在配置目录中。
-
-## API 与流式输出
-
-程序默认发送 `"stream": true`，并解析 `data:` SSE 事件。兼容 OpenAI Chat Completions 流式接口的服务可以直接使用，例如 SiliconFlow，不需要增加命令行参数。
-
-## Agent 与工具
-
-OTTO 默认使用 Agent loop，可使用以下工具：glob 查找 workspace 内的文件，grep 搜索
-workspace 内的文本，read 读取 UTF-8 文本，edit 精确替换文本并返回 diff，write
-创建或覆盖文本文件，websearch 检索互联网信息，webfetch 抓取公开网页并提取正文。
-
-本地文件工具只能访问当前 workspace 的相对路径，拒绝路径穿越和逃逸到 workspace 外的
-符号链接。read、grep、glob 在访问本地内容前会请求读取授权；edit 和 write 会请求
-写入授权。授权选择为：1 仅此次、2 本轮同类操作总是允许、3 拒绝。授权提示会根据
-当前 mode 使用对应语气。
-
-websearch 不会默认调用 Google，而是通过 provider 适配层工作。配置会由真正的
-`otto` 原生读取 `$XDG_CONFIG_HOME/otto/search.env`（默认
-`~/.config/otto/search.env`），不需要修改 `~/.bashrc`，也不需要额外的启动器。
-当前支持 Brave Search、SearXNG 和 Tavily：
-
-    # Tavily（默认使用 basic 搜索深度以节省额度）
-    OTTO_SEARCH_PROVIDER=tavily
-    OTTO_TAVILY_API_KEY=...
-
-    # Brave Search
-    OTTO_SEARCH_PROVIDER=brave
-    OTTO_BRAVE_API_KEY=...
-
-    # 或自建/可信的 SearXNG
-    OTTO_SEARCH_PROVIDER=searxng
-    OTTO_SEARCH_URL=https://your-searxng.example/search
-
-将需要的配置写入 `search.env`，并限制文件权限：
-
-    chmod 600 ~/.config/otto/search.env
-
-`OTTO_SEARCH_CONFIG` 可以临时指定另一份配置文件；为兼容旧用法，进程环境变量只会作为
-配置文件中未设置字段的回退。旧启动器使用的 `OTTO_BIN` 不再参与配置解析。
-
-webfetch 只允许 HTTP/HTTPS，限制响应大小和重定向次数，并拒绝本地、内网和解析到内网
-地址的主机；网页内容会以不可信工具数据交给模型。
-
-## 构建环境
-
-- Rust 工具链（正式构建需要）
-- C11 编译器、libcurl 开发库和 pkg-config（仅 `c-build` / `c-test` 需要）
-
-Ubuntu/Debian 示例：
-
-```bash
-sudo apt install build-essential pkg-config libcurl4-openssl-dev
-```
-
-## 构建与测试
-
-```bash
-make
-make test
-```
-
-`make test` 会先测试正式 Rust 版本，再运行 C 基线回归；也可以分别执行
-`make rust-test`、`make rust-functional-test` 和 `make c-test`。
-
-## 安装与卸载
-
-推荐使用 Makefile 安装到当前用户，不需要 `sudo`：
-
-```bash
 make install
 ```
 
-默认安装位置：
+默认安装到当前用户目录，不需要 `sudo`：
 
 ```text
 可执行文件：~/.local/bin/otto
-提示词配置：~/.config/otto/
-安装状态：~/.local/state/otto/install.manifest
+配置目录：  ~/.config/otto/
 ```
 
-安装脚本会自动编译缺失的 Rust release 可执行文件；已有 API 配置、已有模式文件和当前激活模式都不会被覆盖。它也不会修改 `.bashrc` 等 Shell 配置文件，如果 `~/.local/bin` 不在 `PATH` 中，脚本只会给出提示。
-
-卸载时执行：
+如果终端提示找不到 `otto`，可以只为当前 shell 添加路径：
 
 ```bash
-make uninstall
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`make install` 和 `make uninstall` 是正式生命周期入口。原有的
-`scripts/install.sh`、`scripts/uninstall.sh` 仍然保留，供旧脚本和自动化流程直接调用。
+### 3. 配置模型服务
 
-卸载脚本只处理安装清单中由安装脚本创建、且内容没有被修改的可执行文件和提示词。用户后来修改过的文件、已有的 `config` API 配置文件和 `active_mode` 会被保留；因此卸载不会破坏现有环境。
-
-安装和卸载都支持通过 Make 变量自定义路径。安装时如果使用了 `STATE_DIR`，卸载时需要使用同一个路径：
-
-```bash
-make install PREFIX="$HOME/.local" CONFIG_DIR="$HOME/.config/otto" STATE_DIR="$HOME/.local/state/otto"
-make uninstall STATE_DIR="$HOME/.local/state/otto"
-```
-
-不设置 `PREFIX`、`CONFIG_DIR`、`STATE_DIR` 时，安装脚本分别使用当前用户的
-`~/.local`、XDG 配置目录和 XDG 状态目录；不会修改 `.bashrc` 等 Shell 配置，也不会
-覆盖已有 API 配置、active_mode 或用户修改过的提示词。安装清单 v2 兼容旧 v1 清单，
-升级时会先校验原文件并支持失败回滚。
-
-## 服务配置
-
-推荐使用交互式配置：
+首次使用前运行：
 
 ```bash
 otto --config
 ```
 
-程序会引导输入服务名称、Base URL、API Key 和模型名称。输入 API Key 时终端不会回显。
+按照提示输入：
 
-配置文件默认位于：
+- 服务名称：任意便于识别的名称。
+- Base URL：模型服务地址。
+- API Key：对应服务的密钥，输入时不会在终端显示。
+- 模型名称：服务提供的实际模型名。
+
+OTTO 使用 OpenAI Chat Completions 兼容接口。Base URL 可以填写服务根地址、`/v1` 地址，或完整的 `/chat/completions` 地址。例如：
 
 ```text
-$XDG_CONFIG_HOME/otto/config
+https://api.openai.com
+https://api.siliconflow.cn/v1
+https://api.siliconflow.cn/v1/chat/completions
 ```
 
-如果没有设置 `XDG_CONFIG_HOME`，则使用：
+### 4. 开始使用
+
+```bash
+otto "解释一下这个项目是做什么的"
+otto "帮我分析当前项目最近的错误"
+```
+
+直接运行源码构建出的程序时，也可以使用：
+
+```bash
+target/release/otto "你好"
+```
+
+## 常用命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `otto "问题"` | 提问并完成任务。 |
+| `otto --help` | 查看完整帮助。 |
+| `otto --version` | 查看版本。 |
+| `otto --no-agent "问题"` | 只进行普通问答，不让程序操作工具。 |
+| `otto --root DIR "问题"` | 指定本次任务可以访问的项目目录。 |
+| `otto --mode NAME` | 设置默认回答模式。 |
+| `otto --mode` | 清除默认模式。 |
+| `otto --mode NAME "问题"` | 只为本次请求使用指定模式。 |
+| `otto --mode -- "问题"` | 本次请求不使用可选模式。 |
+
+问题参数可以直接写成多个单词，OTTO 会自动用空格拼接：
+
+```bash
+otto 请解释这个函数为什么返回错误
+```
+
+## 让 OTTO 使用文件和项目
+
+默认情况下，OTTO 将当前目录作为本次任务的工作区。你可以让它查找文件、阅读代码、总结项目，或在授权后编辑文件：
+
+```bash
+otto "找出所有处理用户登录的文件，并说明调用关系"
+otto --root ~/projects/demo "检查这个项目的配置问题"
+```
+
+读取和写入操作会分别请求授权；OTTO 只会在当前工作区范围内处理相对路径。
+
+## 联网搜索
+
+联网搜索需要单独配置搜索服务。OTTO 不会自动使用 Google；当前支持 Tavily、Brave Search 和 SearXNG。
+
+配置保存在 `$XDG_CONFIG_HOME/otto/search.env`，未设置 `XDG_CONFIG_HOME` 时默认是 `~/.config/otto/search.env`。
+
+以下配置任选一种，不要同时设置多个搜索服务。
+
+Tavily：
+
+```env
+OTTO_SEARCH_PROVIDER=tavily
+OTTO_TAVILY_API_KEY=你的 Tavily API Key
+```
+
+Brave Search：
+
+```env
+OTTO_SEARCH_PROVIDER=brave
+OTTO_BRAVE_API_KEY=你的 Brave API Key
+```
+
+自建或可信的 SearXNG：
+
+```env
+OTTO_SEARCH_PROVIDER=searxng
+OTTO_SEARCH_URL=https://your-searxng.example/search
+```
+
+保存包含密钥的文件后，建议限制权限：
+
+```bash
+chmod 600 ~/.config/otto/search.env
+```
+
+配置完成后，直接提问即可：
+
+```bash
+otto "搜索 Rust 官方文档中关于异步运行时的说明"
+```
+
+OTTO 会在需要时使用搜索和网页阅读能力；网页内容仅作为资料提供，不会被当作操作指令执行。
+
+## 回答模式
+
+所有请求都会加载统一提示词 `system.md`。模式是可选的附加提示词，用来固定回答风格。
+
+设置一个默认模式：
+
+```bash
+otto --mode otto
+otto "帮我写一个简洁的提交说明"
+```
+
+只使用一次模式，不改变默认设置：
+
+```bash
+otto --mode jarvis "用更有角色感的方式回答"
+```
+
+清除默认模式：
+
+```bash
+otto --mode
+```
+
+安装时会提供示例模式。你也可以在配置目录中创建自己的模式文件，例如：
+
+```bash
+$EDITOR ~/.config/otto/reviewer.md
+otto --mode reviewer
+```
+
+模式文件的内容会作为额外提示词附加到 `system.md` 后面。
+
+## 配置文件
+
+默认配置位于：
 
 ```text
-~/.config/otto/config
+~/.config/otto/config       模型服务配置
+~/.config/otto/search.env   联网搜索配置
+~/.config/otto/system.md    统一提示词
+~/.config/otto/<mode>.md    自定义回答模式
 ```
 
-配置文件路径的优先级如下：
+如果设置了 `XDG_CONFIG_HOME`，上述路径会相应改为 `$XDG_CONFIG_HOME/otto/`。
 
-1. 设置 `OTTO_CONFIG` 时，直接使用该变量指定的配置文件。
-2. 未设置 `OTTO_CONFIG` 时，优先使用 `$XDG_CONFIG_HOME/otto/config`。
-3. 未设置 `XDG_CONFIG_HOME` 时，使用 `~/.config/otto/config`。
-
-如果通过 `OTTO_CONFIG` 指定了配置文件，提示词目录默认取该配置文件所在目录。
-
-配置文件权限为 `0600`。也可以使用参数式配置，适合自动化环境：
+自动化场景也可以使用参数配置，但 API Key 会进入 shell 历史记录，日常使用推荐交互式配置：
 
 ```bash
 otto --config \
@@ -303,63 +217,74 @@ otto --config \
   --model gpt-4o-mini
 ```
 
-例如使用 SiliconFlow：
+## 管道和脚本
+
+回答输出到标准输出，错误输出到标准错误，可以直接交给其他命令：
 
 ```bash
-otto --config \
-  --name SiliconFlow \
-  --baseurl https://api.siliconflow.cn/v1/chat/completions \
-  --apikey sk-xxxx \
-  --model your-siliconflow-model
+otto "总结当前项目的 README" | tee answer.txt
 ```
 
-不同服务支持的模型名称不同，请填写对应服务提供的实际模型名。
+## 安装、升级和卸载
 
-参数式配置会将 API Key 暴露给 Shell 历史，生产环境推荐使用交互式配置。
-
-配置服务使用 OpenAI Chat Completions 兼容接口。`name` 只是服务名称，不限制为 OpenAI，SiliconFlow、其他兼容服务都可以使用。Base URL 可以填写完整地址，也可以填写服务根地址：
-
-```text
-https://api.openai.com
-https://api.openai.com/v1
-https://api.openai.com/v1/chat/completions
-```
-
-## 管道与脚本集成
-
-回答输出到 stdout，错误输出到 stderr：
+从源码更新后，重新执行下面的命令即可升级：
 
 ```bash
-otto 总结这段文字 | tee answer.txt
+make install
 ```
 
-如果问题以短横线开头，可以使用 `--`：
+卸载 OTTO：
 
 ```bash
-otto -- --help 是什么意思
+make uninstall
 ```
 
-## 项目结构
+卸载只清理安装程序创建且未被用户修改的文件；已有的模型服务配置、当前模式和用户改过的提示词会保留。
 
-```text
-.
-├── src/                  C v0.1 基线源码
-├── include/otto/         C 基线公共头文件
-├── build/c/              C 基线构建产物（忽略）
-├── tests/                功能与安装脚本测试
-├── scripts/              安装与卸载兼容入口
-├── rust/otto/            正式 Rust CLI 与 Agent
-├── docs/                 C 基线和 Rust 迁移记录
-├── assets/               项目 Logo 等静态资源
-├── system.md             统一系统提示词
-├── otto.md               OTTO 语气模式
-├── jarvis.md             JARVIS 语气模式
-├── Makefile              编译、测试与系统级安装入口
-└── README.md             项目说明
+## 常见问题
+
+### `cargo not found`
+
+Rust 已安装但当前 shell 找不到 Cargo 时，执行：
+
+```bash
+. "$HOME/.cargo/env"
 ```
 
-## 路线图
+然后重新运行 `make`。
 
-- [x] Rust 正式入口、默认 Agent loop、文件工具、websearch 和 webfetch。
-- [x] Makefile 统一安装、卸载和 v1 → v2 安全升级路径。
-- [ ] 添加音频模式：支持语音输出，输出 OTTO 的“活字印刷”语音。
+### `otto: command not found`
+
+确认 `~/.local/bin` 在当前 shell 的 `PATH` 中：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### websearch 无法使用
+
+确认 `~/.config/otto/search.env` 中设置了一个搜索服务和对应的 API Key 或 URL，并检查文件权限。
+
+### API 请求失败
+
+检查 `otto --config` 中的 Base URL、模型名称和 API Key 是否属于同一个服务，并确认该服务支持 OpenAI Chat Completions 兼容接口。
+
+## 开发者
+
+编译正式版本：
+
+```bash
+make
+```
+
+运行完整测试：
+
+```bash
+make test
+```
+
+完整测试还需要 C 编译器、`pkg-config` 和 libcurl 开发库。Ubuntu/Debian 可以执行：
+
+```bash
+sudo apt install build-essential pkg-config libcurl4-openssl-dev
+```
