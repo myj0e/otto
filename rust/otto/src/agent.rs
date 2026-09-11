@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::config::Config;
+use crate::config::{Config, SearchConfig};
 use crate::error::{OttoError, Result};
 use crate::http::{self, ChatEvent};
 use crate::permission::PermissionManager;
@@ -185,6 +185,7 @@ fn request_body(config: &Config, messages: &[Value], tools: &[Value]) -> Result<
 
 pub async fn run(
     config: &Config,
+    search_config: &SearchConfig,
     endpoint: &str,
     system_prompt: &str,
     question: &str,
@@ -260,6 +261,7 @@ pub async fn run(
                 workspace: &workspace,
                 permissions: &mut permissions,
                 mode,
+                search_config,
             };
             let output = registry.execute(&call.name, arguments, &mut context).await;
             messages.push(json!({

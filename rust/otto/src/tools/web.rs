@@ -12,6 +12,7 @@ use super::{
     arguments_object, function_definition, optional_string, optional_usize, required_string, Tool,
     ToolContext, ToolOutput,
 };
+use crate::config::SearchConfig;
 use crate::error::{OttoError, Result};
 
 const MAX_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -33,6 +34,7 @@ struct SearchProviderConfig {
 enum SearchProviderKind {
     Brave,
     Searxng,
+    Tavily,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,22 +67,50 @@ struct SearxngResult {
     engine: Option<String>,
 }
 
-fn search_provider() -> Result<Box<dyn SearchProvider>> {
-    let requested = std::env::var("OTTO_SEARCH_PROVIDER")
+#[derive(Debug, Deserialize)]
+struct TavilyResponse {
+    results: Vec<TavilyResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TavilyResult {
+    title: Option<String>,
+    url: Option<String>,
+    content: Option<String>,
+    score: Option<f64>,
+    published_date: Option<String>,
+}
+
+fn env_value(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn search_provider(config: &SearchConfig) -> Result<Box<dyn SearchProvider>> {
+    let requested = config
+        .provider
+        .clone()
+        .or_else(|| env_value(&["OTTO_SEARCH_PROVIDER"]))
         .unwrap_or_default()
-        .trim()
         .to_ascii_lowercase();
-    let endpoint = std::env::var("OTTO_SEARCH_URL")
-        .or_else(|_| std::env::var("OTTO_SEARCH_ENDPOINT"))
+    let endpoint = config
+        .endpoint
+        .clone()
+        .or_else(|| env_value(&["OTTO_SEARCH_URL", "OTTO_SEARCH_ENDPOINT"]))
         .unwrap_or_default();
 
     let kind = match requested.as_str() {
         "brave" => SearchProviderKind::Brave,
         "searxng" | "searx" => SearchProviderKind::Searxng,
+        "tavily" => SearchProviderKind::Tavily,
         "" if !endpoint.is_empty() => SearchProviderKind::Searxng,
         "" => {
             return Err(OttoError::Tool(
-                "websearch 尚未配置。请设置 OTTO_SEARCH_PROVIDER=brave 与 OTTO_SEARCH_API_KEY，或设置 OTTO_SEARCH_PROVIDER=searxng 与 OTTO_SEARCH_URL"
+                "websearch 尚未配置。请在 ~/.config/otto/search.env 中设置 OTTO_SEARCH_PROVIDER 和对应的 API Key 或 URL"
                     .to_owned(),
             ))
         }
@@ -99,9 +129,12 @@ fn search_provider() -> Result<Box<dyn SearchProvider>> {
                 endpoint
             },
             Some(
-                std::env::var("OTTO_SEARCH_API_KEY")
-                    .or_else(|_| std::env::var("OTTO_BRAVE_API_KEY"))
-                    .map_err(|_| {
+                config
+                    .brave_api_key
+                    .clone()
+                    .or_else(|| config.api_key.clone())
+                    .or_else(|| env_value(&["OTTO_BRAVE_API_KEY", "OTTO_SEARCH_API_KEY"]))
+                    .ok_or_else(|| {
                         OttoError::Tool("Brave websearch 缺少 OTTO_SEARCH_API_KEY".to_owned())
                     })?,
             ),
@@ -114,6 +147,21 @@ fn search_provider() -> Result<Box<dyn SearchProvider>> {
             }
             (endpoint, None)
         }
+        SearchProviderKind::Tavily => (
+            if endpoint.is_empty() {
+                "https://api.tavily.com/search".to_owned()
+            } else {
+                endpoint
+            },
+            Some(
+                config
+                    .tavily_api_key
+                    .clone()
+                    .or_else(|| config.api_key.clone())
+                    .or_else(|| env_value(&["OTTO_TAVILY_API_KEY", "OTTO_SEARCH_API_KEY"]))
+                    .ok_or_else(|| OttoError::Tool("Tavily websearch 缺少 API Key".to_owned()))?,
+            ),
+        ),
     };
 
     Ok(Box::new(SearchProviderConfig {
@@ -197,7 +245,42 @@ fn search_result_json(provider: SearchProviderKind, body: &[u8], limit: usize) -
                 .collect::<Vec<_>>();
             Ok(json!({"provider": "searxng", "results": results}))
         }
+        SearchProviderKind::Tavily => {
+            let response: TavilyResponse = serde_json::from_slice(body)?;
+            let results = response
+                .results
+                .into_iter()
+                .take(limit)
+                .enumerate()
+                .filter_map(|(index, result)| {
+                    Some(json!({
+                        "id": index + 1,
+                        "title": result.title?,
+                        "url": result.url?,
+                        "snippet": result.content.unwrap_or_default(),
+                        "score": result.score,
+                        "published_date": result.published_date
+                    }))
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({"provider": "tavily", "results": results}))
+        }
     }
+}
+
+fn tavily_request_body(query: &str, count: usize, language: Option<&str>) -> Value {
+    let mut body = json!({
+        "query": query,
+        "search_depth": "basic",
+        "max_results": count,
+        "include_answer": false,
+        "include_raw_content": false,
+        "include_images": false
+    });
+    if let Some(language) = language {
+        body["language"] = Value::String(language.to_owned());
+    }
+    body
 }
 
 #[async_trait::async_trait]
@@ -213,44 +296,68 @@ impl SearchProvider for SearchProviderConfig {
         match self.kind {
             SearchProviderKind::Brave => "brave",
             SearchProviderKind::Searxng => "searxng",
+            SearchProviderKind::Tavily => "tavily",
         }
     }
 
     async fn search(&self, query: &str, count: usize, language: Option<&str>) -> Result<Value> {
-        let mut url = Url::parse(&self.endpoint)
-            .map_err(|error| OttoError::Tool(format!("搜索地址无效：{error}")))?;
-        match self.kind {
-            SearchProviderKind::Brave => {
-                url.query_pairs_mut()
-                    .append_pair("q", query)
-                    .append_pair("count", &count.to_string());
-                if let Some(language) = language {
-                    url.query_pairs_mut().append_pair("search_lang", language);
-                }
-            }
-            SearchProviderKind::Searxng => {
-                url.query_pairs_mut()
-                    .append_pair("q", query)
-                    .append_pair("format", "json")
-                    .append_pair("categories", "general");
-                if let Some(language) = language {
-                    url.query_pairs_mut().append_pair("language", language);
-                }
-            }
-        }
-
         let client = search_client()?;
-        let mut request = client
-            .get(url)
-            .header(ACCEPT, "application/json")
-            .header(USER_AGENT, "otto/0.2");
-        if let Some(api_key) = self.api_key.as_deref() {
-            request = request.header("X-Subscription-Token", api_key);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| OttoError::Network(error.to_string()))?;
+        let response = match self.kind {
+            SearchProviderKind::Brave | SearchProviderKind::Searxng => {
+                let mut url = Url::parse(&self.endpoint)
+                    .map_err(|error| OttoError::Tool(format!("搜索地址无效：{error}")))?;
+                match self.kind {
+                    SearchProviderKind::Brave => {
+                        url.query_pairs_mut()
+                            .append_pair("q", query)
+                            .append_pair("count", &count.to_string());
+                        if let Some(language) = language {
+                            url.query_pairs_mut().append_pair("search_lang", language);
+                        }
+                    }
+                    SearchProviderKind::Searxng => {
+                        url.query_pairs_mut()
+                            .append_pair("q", query)
+                            .append_pair("format", "json")
+                            .append_pair("categories", "general");
+                        if let Some(language) = language {
+                            url.query_pairs_mut().append_pair("language", language);
+                        }
+                    }
+                    SearchProviderKind::Tavily => unreachable!(),
+                }
+
+                let mut request = client
+                    .get(url)
+                    .header(ACCEPT, "application/json")
+                    .header(USER_AGENT, "otto/0.2");
+                if let Some(api_key) = self.api_key.as_deref() {
+                    request = request.header("X-Subscription-Token", api_key);
+                }
+                request
+                    .send()
+                    .await
+                    .map_err(|error| OttoError::Network(error.to_string()))?
+            }
+            SearchProviderKind::Tavily => {
+                let url = Url::parse(&self.endpoint)
+                    .map_err(|error| OttoError::Tool(format!("搜索地址无效：{error}")))?;
+                let api_key = self
+                    .api_key
+                    .as_deref()
+                    .ok_or_else(|| OttoError::Tool("Tavily websearch 缺少 API Key".to_owned()))?;
+                client
+                    .post(url)
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(USER_AGENT, "otto/0.2")
+                    .bearer_auth(api_key)
+                    .json(&tavily_request_body(query, count, language))
+                    .send()
+                    .await
+                    .map_err(|error| OttoError::Network(error.to_string()))?
+            }
+        };
         let body = response_body(response, MAX_SEARCH_RESPONSE_BYTES).await?;
         search_result_json(self.kind, &body, count)
     }
@@ -275,11 +382,7 @@ impl Tool for WebSearchTool {
         )
     }
 
-    async fn execute(
-        &self,
-        arguments: Value,
-        _context: &mut ToolContext<'_>,
-    ) -> Result<ToolOutput> {
+    async fn execute(&self, arguments: Value, context: &mut ToolContext<'_>) -> Result<ToolOutput> {
         let arguments = arguments_object(arguments)?;
         let query = required_string(&arguments, "query")?;
         if query.len() > 1000 {
@@ -287,7 +390,7 @@ impl Tool for WebSearchTool {
         }
         let count = optional_usize(&arguments, "count", 5, 10)?;
         let language = optional_string(&arguments, "language")?;
-        let provider = search_provider()?;
+        let provider = search_provider(context.search_config)?;
         let result = provider.search(&query, count, language.as_deref()).await?;
         Ok(ToolOutput::text(format!(
             "[untrusted_web_search_results]\nprovider: {}\n{}\n[/untrusted_web_search_results]",
@@ -520,7 +623,12 @@ impl Tool for WebFetchTool {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    use super::{extract_html, is_private_ip};
+    use crate::config::SearchConfig;
+
+    use super::{
+        extract_html, is_private_ip, search_provider, search_result_json, tavily_request_body,
+        SearchProviderKind,
+    };
 
     #[test]
     fn blocks_private_addresses() {
@@ -538,5 +646,47 @@ mod tests {
         assert_eq!(title, "Title");
         assert_eq!(content.trim(), "Hello");
         assert!(!content.contains("alert"));
+    }
+
+    #[test]
+    fn normalizes_tavily_results() {
+        let body = br#"
+        {
+          "results": [
+            {
+              "title": "Rust",
+              "url": "https://www.rust-lang.org/",
+              "content": "A language empowering everyone.",
+              "score": 0.91,
+              "published_date": null
+            }
+          ]
+        }
+        "#;
+        let result = search_result_json(SearchProviderKind::Tavily, body, 5).unwrap();
+        assert_eq!(result["provider"], "tavily");
+        assert_eq!(result["results"][0]["title"], "Rust");
+        assert_eq!(result["results"][0]["score"], 0.91);
+    }
+
+    #[test]
+    fn builds_credit_conscious_tavily_request() {
+        let body = tavily_request_body("Rust", 3, Some("zh-cn"));
+        assert_eq!(body["query"], "Rust");
+        assert_eq!(body["search_depth"], "basic");
+        assert_eq!(body["max_results"], 3);
+        assert_eq!(body["language"], "zh-cn");
+        assert_eq!(body["include_raw_content"], false);
+    }
+
+    #[test]
+    fn prefers_native_tavily_config_over_environment() {
+        let config = SearchConfig {
+            provider: Some("tavily".to_owned()),
+            tavily_api_key: Some("test-key".to_owned()),
+            ..SearchConfig::default()
+        };
+        let provider = search_provider(&config).expect("native search config");
+        assert_eq!(provider.name(), "tavily");
     }
 }

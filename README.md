@@ -174,16 +174,29 @@ workspace 内的文本，read 读取 UTF-8 文本，edit 精确替换文本并�
 写入授权。授权选择为：1 仅此次、2 本轮同类操作总是允许、3 拒绝。授权提示会根据
 当前 mode 使用对应语气。
 
-websearch 不会默认调用 Google，而是通过 provider 适配层工作。当前支持 Brave Search
-和 SearXNG：
+websearch 不会默认调用 Google，而是通过 provider 适配层工作。配置会由真正的
+`otto` 原生读取 `$XDG_CONFIG_HOME/otto/search.env`（默认
+`~/.config/otto/search.env`），不需要修改 `~/.bashrc`，也不需要额外的启动器。
+当前支持 Brave Search、SearXNG 和 Tavily：
+
+    # Tavily（默认使用 basic 搜索深度以节省额度）
+    OTTO_SEARCH_PROVIDER=tavily
+    OTTO_TAVILY_API_KEY=...
 
     # Brave Search
-    export OTTO_SEARCH_PROVIDER=brave
-    export OTTO_SEARCH_API_KEY=...
+    OTTO_SEARCH_PROVIDER=brave
+    OTTO_BRAVE_API_KEY=...
 
     # 或自建/可信的 SearXNG
-    export OTTO_SEARCH_PROVIDER=searxng
-    export OTTO_SEARCH_URL=https://your-searxng.example/search
+    OTTO_SEARCH_PROVIDER=searxng
+    OTTO_SEARCH_URL=https://your-searxng.example/search
+
+将需要的配置写入 `search.env`，并限制文件权限：
+
+    chmod 600 ~/.config/otto/search.env
+
+`OTTO_SEARCH_CONFIG` 可以临时指定另一份配置文件；为兼容旧用法，进程环境变量只会作为
+配置文件中未设置字段的回退。旧启动器使用的 `OTTO_BIN` 不再参与配置解析。
 
 webfetch 只允许 HTTP/HTTPS，限制响应大小和重定向次数，并拒绝本地、内网和解析到内网
 地址的主机；网页内容会以不可信工具数据交给模型。

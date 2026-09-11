@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
+use crate::config::SearchConfig;
 use crate::error::{OttoError, Result};
 use crate::permission::PermissionManager;
 use crate::workspace::Workspace;
@@ -17,6 +18,7 @@ pub struct ToolContext<'a> {
     pub workspace: &'a Workspace,
     pub permissions: &'a mut PermissionManager,
     pub mode: Option<&'a str>,
+    pub search_config: &'a SearchConfig,
 }
 
 #[derive(Debug, Clone)]

@@ -11,6 +11,15 @@ pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_NAME: &str = "Openai";
 pub const DEFAULT_BASEURL: &str = "https://api.openai.com";
 
+#[derive(Clone, Default)]
+pub struct SearchConfig {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub api_key: Option<String>,
+    pub tavily_api_key: Option<String>,
+    pub brave_api_key: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub name: Option<String>,
@@ -68,6 +77,15 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config"))
 }
 
+pub fn search_config_path() -> Result<PathBuf> {
+    if let Ok(override_path) = env::var("OTTO_SEARCH_CONFIG") {
+        if !override_path.is_empty() {
+            return Ok(PathBuf::from(override_path));
+        }
+    }
+    Ok(config_dir()?.join("search.env"))
+}
+
 pub fn load(path: &Path) -> Result<(Config, bool)> {
     let mut config = Config::default();
     let mut file = match File::open(path) {
@@ -107,6 +125,75 @@ pub fn load(path: &Path) -> Result<(Config, bool)> {
             "baseurl" => config.baseurl = Some(value),
             "apikey" => config.apikey = Some(value),
             "model" => config.model = value,
+            _ => {}
+        }
+    }
+
+    Ok((config, true))
+}
+
+fn search_value(raw_value: &str, path: &Path, line_number: usize) -> Result<String> {
+    let value = raw_value.trim();
+    if value.len() >= 2 {
+        let first = value.as_bytes()[0];
+        let last = value.as_bytes()[value.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return Ok(value[1..value.len() - 1].to_owned());
+        }
+        if first == b'"' || first == b'\'' {
+            return Err(OttoError::Config(format!(
+                "搜索配置文件 {} 第 {} 行引号不匹配",
+                path.display(),
+                line_number
+            )));
+        }
+    }
+    Ok(value.to_owned())
+}
+
+pub fn load_search(path: &Path) -> Result<(SearchConfig, bool)> {
+    let mut config = SearchConfig::default();
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((config, false)),
+        Err(error) => {
+            return Err(OttoError::Config(format!(
+                "无法读取搜索配置文件 {}：{error}",
+                path.display()
+            )))
+        }
+    };
+
+    let mut content = String::new();
+    file.read_to_string(&mut content).map_err(|error| {
+        OttoError::Config(format!("读取搜索配置文件 {} 失败：{error}", path.display()))
+    })?;
+
+    for (line_index, line) in content.lines().enumerate() {
+        let line_number = line_index + 1;
+        let entry = line.trim();
+        if entry.is_empty() || entry.starts_with('#') {
+            continue;
+        }
+        let entry = entry.strip_prefix("export ").unwrap_or(entry).trim();
+        let (key, raw_value) = entry.split_once('=').ok_or_else(|| {
+            OttoError::Config(format!(
+                "搜索配置文件 {} 第 {} 行格式错误",
+                path.display(),
+                line_number
+            ))
+        })?;
+        let value = search_value(raw_value, path, line_number)?;
+        let value = (!value.is_empty()).then_some(value);
+
+        match key.trim() {
+            "OTTO_SEARCH_PROVIDER" => config.provider = value,
+            "OTTO_SEARCH_URL" | "OTTO_SEARCH_ENDPOINT" => config.endpoint = value,
+            "OTTO_SEARCH_API_KEY" => config.api_key = value,
+            "OTTO_TAVILY_API_KEY" => config.tavily_api_key = value,
+            "OTTO_BRAVE_API_KEY" => config.brave_api_key = value,
+            // `OTTO_BIN` was used by the removed shell launcher. It is
+            // intentionally ignored by the native application config.
             _ => {}
         }
     }
@@ -360,4 +447,30 @@ pub fn interactive(path: &Path) -> Result<()> {
         println!("配置未保存。");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::load_search;
+
+    #[test]
+    fn loads_native_search_env_without_executing_shell() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("search.env");
+        fs::write(
+            &path,
+            "export OTTO_SEARCH_PROVIDER=tavily\n\
+             OTTO_TAVILY_API_KEY=\"test-key\"\n\
+             OTTO_BIN=/tmp/legacy-launcher-target\n",
+        )
+        .expect("search config");
+
+        let (config, found) = load_search(&path).expect("search config loads");
+        assert!(found);
+        assert_eq!(config.provider.as_deref(), Some("tavily"));
+        assert_eq!(config.tavily_api_key.as_deref(), Some("test-key"));
+        assert!(config.api_key.is_none());
+    }
 }
