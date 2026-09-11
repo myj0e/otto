@@ -63,6 +63,7 @@ def build_handler(requests):
                                     "index": 0,
                                     "delta": {
                                         "role": "assistant",
+                                        "content": "先读取这个文件，再根据内容回答。",
                                         "tool_calls": [
                                             {
                                                 "index": 0,
@@ -206,6 +207,10 @@ def main():
                 raise AssertionError(f"read authorization prompt was not shown: {output!r}")
             if b"mock agent final" not in output:
                 raise AssertionError(f"final answer was not printed: {output!r}")
+            if "[otto] ⚙ 工具调用：read".encode() not in output:
+                raise AssertionError(f"tool summary was not printed: {output!r}")
+            if "[otto] 模型说明：先读取这个文件，再根据内容回答。".encode() not in output:
+                raise AssertionError(f"model tool note was not printed: {output!r}")
 
             if len(requests) != 2:
                 raise AssertionError(f"expected two Agent requests, got {len(requests)}")

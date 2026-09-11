@@ -28,10 +28,15 @@ pub struct ReadTool;
 pub struct EditTool;
 pub struct WriteTool;
 
-fn authorize(context: &mut ToolContext<'_>, capability: Capability, action: &str) -> Result<()> {
+fn authorize(
+    context: &mut ToolContext<'_>,
+    tool_name: &str,
+    capability: Capability,
+    action: &str,
+) -> Result<()> {
     context
         .permissions
-        .authorize(capability, context.mode, action)
+        .authorize(tool_name, capability, context.mode, action)
 }
 
 fn require_file(path: &Path, input: &str) -> Result<()> {
@@ -195,6 +200,7 @@ impl Tool for GlobTool {
         let max_results = optional_usize(&arguments, "max_results", 100, MAX_RESULTS)?;
         authorize(
             context,
+            self.name(),
             Capability::Read,
             &format!(
                 "使用 Glob 查找 {} 下的 {}",
@@ -270,6 +276,7 @@ impl Tool for GrepTool {
         let max_results = optional_usize(&arguments, "max_results", 100, MAX_RESULTS)?;
         authorize(
             context,
+            self.name(),
             Capability::Read,
             &format!("使用 Grep 搜索 {} 下的内容", path.as_deref().unwrap_or(".")),
         )?;
@@ -362,6 +369,7 @@ impl Tool for ReadTool {
         let line_end = optional_usize(&arguments, "line_end", 1_000_000, 1_000_000)?;
         authorize(
             context,
+            self.name(),
             Capability::Read,
             &format!("读取本地文本文件 {input}"),
         )?;
@@ -421,6 +429,7 @@ impl Tool for EditTool {
         let expected_sha256 = optional_string(&arguments, "expected_sha256")?;
         authorize(
             context,
+            self.name(),
             Capability::Write,
             &format!("修改本地文本文件 {input}"),
         )?;
@@ -502,6 +511,7 @@ impl Tool for WriteTool {
         let expected_sha256 = optional_string(&arguments, "expected_sha256")?;
         authorize(
             context,
+            self.name(),
             Capability::Write,
             &format!("创建或覆盖本地文本文件 {input}"),
         )?;

@@ -75,6 +75,27 @@ rg -q 'test-model' "$capture_file"
 rg -q '"stream":true' "$capture_file"
 rg -q '所有请求都会加载' "$capture_file"
 
+pipe_answer=$(printf 'alpha.txt\nbeta.txt\n' | env \
+    HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
+    http_proxy= https_proxy= all_proxy= \
+    NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+    OTTO_CONFIG="$config_file" "$binary" 这些文件分别是什么)
+printf '%s\n' "$pipe_answer" | rg -q '^mock: 这些文件分别是什么$'
+rg -q -- '--- OTTO STDIN ---' "$capture_file"
+rg -q -- 'alpha.txt' "$capture_file"
+rg -q -- 'beta.txt' "$capture_file"
+
+no_stdin_answer=$(printf 'this-must-not-be-forwarded' | env \
+    HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
+    http_proxy= https_proxy= all_proxy= \
+    NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+    OTTO_CONFIG="$config_file" "$binary" --no-stdin 只使用问题参数)
+printf '%s\n' "$no_stdin_answer" | rg -q '^mock: 只使用问题参数$'
+if rg -q -- 'OTTO STDIN|this-must-not-be-forwarded' "$capture_file"; then
+    echo "--no-stdin should omit piped content" >&2
+    exit 1
+fi
+
 mode_directory="$temporary_directory/modes"
 mkdir -p "$mode_directory"
 cp "$test_root/system.md" "$mode_directory/system.md"

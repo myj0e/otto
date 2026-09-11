@@ -3,9 +3,11 @@ mod cli;
 mod config;
 mod error;
 mod http;
+mod input;
 mod permission;
 mod prompt;
 mod tools;
+mod ui;
 mod workspace;
 
 use std::io::{self, Write};
@@ -101,7 +103,7 @@ fn load_prompts(options: &CliOptions) -> Result<(String, Option<String>)> {
 }
 
 async fn ask(options: &CliOptions) -> Result<()> {
-    let question = cli::join_prompt(&options.prompt)?;
+    let question = input::build_question(&options.prompt, options.no_stdin)?;
     let path = config::config_path()?;
     let (config, found) = config::load(&path)?;
     if !found {

@@ -1,6 +1,7 @@
-use std::io::{self, IsTerminal, Write};
+use std::collections::HashSet;
 
 use crate::error::{OttoError, Result};
+use crate::ui::{self, AuthorizationChoice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
@@ -10,68 +11,49 @@ pub enum Capability {
 
 #[derive(Debug, Default)]
 pub struct PermissionManager {
-    read_session: bool,
-    write_session: bool,
+    allowed_tools: HashSet<String>,
 }
 
 impl PermissionManager {
     pub fn authorize(
         &mut self,
+        tool_name: &str,
         capability: Capability,
         mode: Option<&str>,
         action: &str,
     ) -> Result<()> {
-        let session_allowed = match capability {
-            Capability::Read => self.read_session,
-            Capability::Write => self.write_session,
-        };
-        if session_allowed {
+        let tool_name = tool_name.to_ascii_lowercase();
+        if self.allowed_tools.contains(&tool_name) {
             return Ok(());
         }
 
-        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            return Err(OttoError::Permission(format!(
-                "当前终端不可交互，已拒绝本地{}操作：{action}",
+        let choice = ui::select_authorization(&tool_name, capability.label(), mode, action)?;
+        match choice {
+            AuthorizationChoice::Once => Ok(()),
+            AuthorizationChoice::AlwaysForTool => {
+                self.allowed_tools.insert(tool_name);
+                Ok(())
+            }
+            AuthorizationChoice::Deny => Err(OttoError::Permission(format!(
+                "用户拒绝了本地{}操作：{action}",
                 capability.label()
-            )));
+            ))),
         }
+    }
 
-        print!("{}", authorization_message(mode, capability, action));
-        io::stdout().flush()?;
+    #[cfg(test)]
+    fn remember_tool(&mut self, tool_name: &str) {
+        self.allowed_tools.insert(tool_name.to_ascii_lowercase());
+    }
 
-        loop {
-            let mut answer = String::new();
-            if io::stdin().read_line(&mut answer)? == 0 {
-                return Err(OttoError::Permission(
-                    "授权输入已结束，已拒绝本地操作".to_owned(),
-                ));
-            }
-            match answer.trim().to_ascii_lowercase().as_str() {
-                "1" | "y" | "yes" => return Ok(()),
-                "2" | "a" | "always" => {
-                    match capability {
-                        Capability::Read => self.read_session = true,
-                        Capability::Write => self.write_session = true,
-                    }
-                    return Ok(());
-                }
-                "3" | "n" | "no" => {
-                    return Err(OttoError::Permission(format!(
-                        "用户拒绝了本地{}操作：{action}",
-                        capability.label()
-                    )))
-                }
-                _ => {
-                    print!("请输入 1、2 或 3：");
-                    io::stdout().flush()?;
-                }
-            }
-        }
+    #[cfg(test)]
+    fn is_allowed(&self, tool_name: &str) -> bool {
+        self.allowed_tools.contains(&tool_name.to_ascii_lowercase())
     }
 }
 
 impl Capability {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Read => "读取",
             Self::Write => "写入",
@@ -79,27 +61,15 @@ impl Capability {
     }
 }
 
-fn authorization_message(mode: Option<&str>, capability: Capability, action: &str) -> String {
-    let safe_action: String = action
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(200)
-        .collect();
-    let mode = mode.unwrap_or_default().to_ascii_lowercase();
-    let label = capability.label();
-    let (opening, closing) = match mode.as_str() {
-        "otto" => (
-            "这波要碰你本地文件了，",
-            "你确认就输入 1；想让本轮同类操作都放行输入 2；不让碰输入 3，别稀里糊涂点确认。",
-        ),
-        "jarvis" => (
-            "检测到需要访问本地文件，",
-            "请确认授权范围：1 仅此次，2 本轮同类操作总是允许，3 拒绝。",
-        ),
-        _ => (
-            "otto 需要访问本地文件，",
-            "请确认授权范围：1 仅此次，2 本轮同类操作总是允许，3 拒绝。",
-        ),
-    };
-    format!("\n{opening}即将{label}：{safe_action}\n{closing}\n授权选择 [1/2/3]: ")
+#[cfg(test)]
+mod tests {
+    use super::PermissionManager;
+
+    #[test]
+    fn remembers_only_the_specific_tool() {
+        let mut permissions = PermissionManager::default();
+        permissions.remember_tool("read");
+        assert!(permissions.is_allowed("read"));
+        assert!(!permissions.is_allowed("grep"));
+    }
 }

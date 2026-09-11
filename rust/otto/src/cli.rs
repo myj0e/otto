@@ -24,6 +24,7 @@ pub struct CliOptions {
     pub has_config_options: bool,
     pub root: Option<PathBuf>,
     pub no_agent: bool,
+    pub no_stdin: bool,
 }
 
 impl Default for CliOptions {
@@ -40,6 +41,7 @@ impl Default for CliOptions {
             has_config_options: false,
             root: None,
             no_agent: false,
+            no_stdin: false,
         }
     }
 }
@@ -122,8 +124,10 @@ fn parse_mode(arguments: &[String]) -> Result<CliOptions> {
         options.raw_mode = true;
         options.command = Command::Mode;
         return Ok(options);
-    } else if matches!(arguments[1].as_str(), "--" | "--no-agent" | "--root")
-        || arguments[1].starts_with("--root=")
+    } else if matches!(
+        arguments[1].as_str(),
+        "--" | "--no-agent" | "--no-stdin" | "--root"
+    ) || arguments[1].starts_with("--root=")
     {
         options.raw_mode = true;
         index = 1;
@@ -157,6 +161,11 @@ fn parse_question_tail(
             index += 1;
             continue;
         }
+        if arguments[index] == "--no-stdin" {
+            options.no_stdin = true;
+            index += 1;
+            continue;
+        }
         if let Some(value) = take_option_value(arguments, &mut index, "--root")? {
             options.root = Some(PathBuf::from(value));
             index += 1;
@@ -175,7 +184,7 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<CliOptions> 
     let arguments: Vec<String> = arguments.into_iter().collect();
 
     if arguments.is_empty() {
-        return Err(usage_error("请提供问题，或使用 otto --help 查看帮助"));
+        return Ok(CliOptions::default());
     }
 
     match arguments[0].as_str() {
@@ -191,16 +200,13 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<CliOptions> 
         argument if argument == "--mode" || argument.starts_with("--mode=") => {
             parse_mode(&arguments)
         }
-        "--" => {
-            if arguments.len() == 1 {
-                return Err(usage_error("otto: -- 后面缺少问题内容"));
-            }
-            Ok(CliOptions {
-                prompt: arguments[1..].to_vec(),
-                ..CliOptions::default()
-            })
+        "--" => Ok(CliOptions {
+            prompt: arguments[1..].to_vec(),
+            ..CliOptions::default()
+        }),
+        "--no-agent" | "--no-stdin" | "--root" => {
+            parse_question_tail(&arguments, 0, CliOptions::default())
         }
-        "--no-agent" | "--root" => parse_question_tail(&arguments, 0, CliOptions::default()),
         argument if argument.starts_with("--root=") => {
             parse_question_tail(&arguments, 0, CliOptions::default())
         }
@@ -212,14 +218,7 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<CliOptions> 
 }
 
 pub fn join_prompt(arguments: &[String]) -> Result<String> {
-    if arguments.is_empty() {
-        return Err(usage_error("请提供问题，或使用 otto --help 查看帮助"));
-    }
-
     let prompt = arguments.join(" ");
-    if prompt.is_empty() {
-        return Err(usage_error("问题内容不能为空"));
-    }
     if prompt.len() > 1024 * 1024 {
         return Err(usage_error("问题内容超过 1 MiB 限制"));
     }
@@ -237,6 +236,7 @@ pub fn print_help() {
     println!("  otto --mode -- <问题内容...>");
     println!("  otto --root <目录> <问题内容...>");
     println!("  otto --no-agent <问题内容...>");
+    println!("  otto --no-stdin <问题内容...>");
     println!("  otto --config");
     println!("  otto --config --name ... --baseurl ... --apikey ... [--model ...]");
     println!("  otto --help");
@@ -244,6 +244,7 @@ pub fn print_help() {
     println!();
     println!("说明:");
     println!("  问题参数会自动用空格拼接，通常不需要加引号。");
+    println!("  stdin 是管道时会作为附加上下文读取；--no-stdin 可关闭此行为。");
     println!("  普通请求默认加载 system.md，并附加当前保存的模式。");
     println!("  请求默认使用 SSE 流式输出。");
     println!("  Agent 默认启用；--no-agent 可仅发送普通 Chat 请求。");
@@ -319,5 +320,26 @@ mod tests {
         assert!(options.raw_mode);
         assert_eq!(options.root, Some(std::path::PathBuf::from("workspace")));
         assert_eq!(options.prompt, arguments(&["你好"]));
+    }
+
+    #[test]
+    fn parses_no_stdin_flag() {
+        let options = parse(arguments(&["--no-stdin", "你好"])).expect("options");
+        assert!(options.no_stdin);
+        assert_eq!(options.prompt, arguments(&["你好"]));
+    }
+
+    #[test]
+    fn permits_empty_arguments_for_stdin_only_requests() {
+        let options = parse(Vec::<String>::new()).expect("options");
+        assert_eq!(options.command, Command::Ask);
+        assert!(options.prompt.is_empty());
+    }
+
+    #[test]
+    fn permits_empty_separator_for_stdin_only_requests() {
+        let options = parse(arguments(&["--"])).expect("options");
+        assert_eq!(options.command, Command::Ask);
+        assert!(options.prompt.is_empty());
     }
 }
