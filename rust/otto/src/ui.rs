@@ -8,7 +8,6 @@ use crossterm::{execute, queue};
 
 use crate::error::{OttoError, Result};
 
-const MODEL_NOTE_MAX_CHARS: usize = 240;
 const ACTION_MAX_CHARS: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,13 +49,6 @@ pub fn print_tool_summary(names: &[String]) {
         .collect::<Vec<_>>()
         .join(" · ");
     eprintln!("[otto] ⚙ 工具调用：{summary}");
-}
-
-pub fn print_model_note(note: &str) {
-    let note = sanitize_inline(note, MODEL_NOTE_MAX_CHARS);
-    if !note.is_empty() {
-        eprintln!("[otto] 模型说明：{note}");
-    }
 }
 
 pub fn select_authorization(
@@ -317,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn removes_control_characters_from_model_text() {
+    fn removes_control_characters_from_inline_text() {
         assert_eq!(
             sanitize_inline("hello\nworld\u{1b}[31m", 100),
             "hello world [31m"

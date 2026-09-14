@@ -14,21 +14,25 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-def sse_response(handler, events):
+def sse_response(handler, events, first_event_sent=None, continue_event=None):
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache")
     handler.end_headers()
-    for event in events:
+    for index, event in enumerate(events):
         encoded = ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode()
         for offset in range(0, len(encoded), 5):
             handler.wfile.write(encoded[offset : offset + 5])
             handler.wfile.flush()
+        if index == 0 and first_event_sent is not None:
+            first_event_sent.set()
+            if continue_event is not None and not continue_event.wait(timeout=5):
+                raise RuntimeError("timed out waiting for streamed output")
     handler.wfile.write(b"data: [DONE]\n\n")
     handler.wfile.flush()
 
 
-def build_handler(requests):
+def build_handler(requests, first_event_sent, continue_event):
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
@@ -99,6 +103,8 @@ def build_handler(requests):
                             ]
                         },
                     ],
+                    first_event_sent,
+                    continue_event,
                 )
             else:
                 sse_response(
@@ -127,7 +133,12 @@ def build_handler(requests):
 def main():
     binary = str(pathlib.Path(sys.argv[1]).resolve())
     requests = []
-    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(requests))
+    first_event_sent = threading.Event()
+    continue_event = threading.Event()
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        build_handler(requests, first_event_sent, continue_event),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
@@ -178,6 +189,7 @@ def main():
 
             output = bytearray()
             authorized = False
+            streamed_before_first_response_finished = False
             deadline = time.monotonic() + 10
             try:
                 while process.poll() is None and time.monotonic() < deadline:
@@ -188,12 +200,20 @@ def main():
                         except OSError:
                             break
                     if (
+                        first_event_sent.is_set()
+                        and not streamed_before_first_response_finished
+                        and "先读取这个文件，再根据内容回答。".encode() in output
+                    ):
+                        streamed_before_first_response_finished = True
+                        continue_event.set()
+                    if (
                         not authorized
                         and "授权选择 [1/2/3]: ".encode() in output
                     ):
                         os.write(master, b"2\n")
                         authorized = True
             finally:
+                continue_event.set()
                 if process.poll() is None:
                     process.terminate()
                     process.wait(timeout=2)
@@ -207,10 +227,16 @@ def main():
                 raise AssertionError(f"read authorization prompt was not shown: {output!r}")
             if b"mock agent final" not in output:
                 raise AssertionError(f"final answer was not printed: {output!r}")
+            if not streamed_before_first_response_finished:
+                raise AssertionError(
+                    "model text was not streamed before the first SSE response ended"
+                )
+            if "先读取这个文件，再根据内容回答。".encode() not in output:
+                raise AssertionError(f"streamed model text was not printed: {output!r}")
             if "[otto] ⚙ 工具调用：read".encode() not in output:
                 raise AssertionError(f"tool summary was not printed: {output!r}")
-            if "[otto] 模型说明：先读取这个文件，再根据内容回答。".encode() not in output:
-                raise AssertionError(f"model tool note was not printed: {output!r}")
+            if "[otto] 模型说明：".encode() in output:
+                raise AssertionError(f"model text was printed twice: {output!r}")
 
             if len(requests) != 2:
                 raise AssertionError(f"expected two Agent requests, got {len(requests)}")
