@@ -1,4 +1,5 @@
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -160,10 +161,11 @@ where
     let mut pending = Vec::new();
     let mut event_data = String::new();
     let mut received = 0usize;
-    let finished = Cell::new(false);
+    let finished = Arc::new(AtomicBool::new(false));
+    let finished_for_dispatch = Arc::clone(&finished);
     let mut dispatch = |event: ChatEvent| {
         if matches!(&event, ChatEvent::Done) {
-            finished.set(true);
+            finished_for_dispatch.store(true, Ordering::Relaxed);
         }
         on_event(event)
     };
@@ -182,7 +184,7 @@ where
             let line: Vec<u8> = pending.drain(..=position).collect();
             process_line(&line[..line.len() - 1], &mut event_data, &mut dispatch)?;
         }
-        if finished.get() {
+        if finished.load(Ordering::Relaxed) {
             break;
         }
     }

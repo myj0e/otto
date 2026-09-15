@@ -255,13 +255,21 @@ pub async fn run(
             .values()
             .map(|call| call.name.clone())
             .collect::<Vec<_>>();
+        let has_websearch = tool_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("websearch"));
+        // The effective websearch name is known only after native search has
+        // either succeeded or handed control to the fallback provider.
         if wrote_anything && !last_was_newline {
             stdout.write_all(b"\n")?;
             stdout.flush()?;
             last_was_newline = true;
         }
-        ui::print_tool_summary(&tool_names);
+        if !has_websearch {
+            ui::print_tool_summary(&tool_names);
+        }
         messages.push(assistant_message(&turn));
+        let mut displayed_tool_names = Vec::with_capacity(tool_names.len());
         for (position, (_, call)) in turn.tool_calls.into_iter().enumerate() {
             total_tool_calls += 1;
             if total_tool_calls > MAX_TOOL_CALLS {
@@ -272,14 +280,25 @@ pub async fn run(
                 workspace: &workspace,
                 permissions: &mut permissions,
                 mode,
+                model_config: config,
+                model_endpoint: endpoint,
                 search_config,
             };
             let output = registry.execute(&call.name, arguments, &mut context).await;
+            displayed_tool_names.push(
+                output
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| call.name.clone()),
+            );
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tool_call_id(position, &call),
                 "content": output.content
             }));
+        }
+        if has_websearch {
+            ui::print_tool_summary(&displayed_tool_names);
         }
 
         if round + 1 == MAX_AGENT_ROUNDS {

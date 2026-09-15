@@ -122,11 +122,14 @@ otto --root ~/projects/demo "检查这个项目的配置问题"
 
 ## 联网搜索
 
-联网搜索需要单独配置搜索服务。OTTO 不会自动使用 Google；当前支持 Tavily、Brave Search 和 SearXNG。
+`websearch` 默认优先调用当前模型服务的原生联网搜索能力。原生接口不可用、模型不支持，
+或原生请求失败时，才会使用配置的第三方搜索服务兜底。当前自动识别 OpenAI-compatible
+的 OpenAI、OpenRouter 和阿里云/Qwen 搜索协议；其他兼容服务会先尝试标准的
+`web_search_options`。
 
 配置保存在 `$XDG_CONFIG_HOME/otto/search.env`，未设置 `XDG_CONFIG_HOME` 时默认是 `~/.config/otto/search.env`。
 
-以下配置任选一种，不要同时设置多个搜索服务。
+如果模型服务本身支持原生搜索，可以不创建此文件。需要第三方兜底时，以下配置任选一种：
 
 Tavily：
 
@@ -147,6 +150,19 @@ OTTO_BRAVE_API_KEY=你的 Brave API Key
 ```env
 OTTO_SEARCH_PROVIDER=searxng
 OTTO_SEARCH_URL=https://your-searxng.example/search
+```
+
+搜索策略默认是原生优先、第三方兜底。如需临时或永久只使用第三方服务：
+
+```env
+OTTO_SEARCH_MODE=third-party
+```
+
+自动识别失败或使用自定义网关时，可以显式指定原生协议：
+
+```env
+# openai-chat、openrouter 或 alibaba-chat
+OTTO_NATIVE_SEARCH_PROTOCOL=openai-chat
 ```
 
 保存包含密钥的文件后，建议限制权限：
@@ -270,7 +286,10 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### websearch 无法使用
 
-确认 `~/.config/otto/search.env` 中设置了一个搜索服务和对应的 API Key 或 URL，并检查文件权限。
+先确认当前模型和网关确实支持原生联网搜索；如果不支持，确认
+`~/.config/otto/search.env` 中设置了一个第三方搜索服务和对应的 API Key 或 URL，
+并检查文件权限。也可以检查是否误设置了 `OTTO_SEARCH_MODE=third-party` 或错误的
+`OTTO_NATIVE_SEARCH_PROTOCOL`。
 
 ### API 请求失败
 

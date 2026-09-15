@@ -157,10 +157,11 @@ Glob → Grep → Read → 权限 → edit → write → hash/diff/atomic write
 
 ### M6：websearch
 
-- 定义 `SearchProvider` trait。
-- 实现 Brave provider。
-- 实现 SearXNG provider。
-- 实现 Tavily provider，并默认使用 `basic` 搜索深度控制额度消耗。
+- 定义原生优先的搜索路由：模型原生搜索成功时不触发第三方请求。
+- 通过 OpenAI-compatible Chat Completions 调用模型原生搜索，并适配 OpenAI、OpenRouter
+  和阿里云/Qwen 的请求形态。
+- 原生搜索失败时再进入 `SearchProvider` trait。
+- 保留并实现 Brave、SearXNG 和 Tavily provider，并默认使用 `basic` 搜索深度控制额度消耗。
 - 由原生 `otto` 读取 `search.env`，不依赖 shell 启动器传递配置。
 - 统一搜索结果结构。
 - 保存当前会话的 `search_result_id` 到 URL 映射。
@@ -190,8 +191,8 @@ Glob → Grep → Read → 权限 → edit → write → hash/diff/atomic write
 Rust 版本必须通过：
 
 当前 Rust 单元测试覆盖 CLI 参数、SSE 分片、tool call 拼接、workspace 路径穿越、
-符号链接逃逸、工具输出截断和网页正文清洗；功能测试覆盖普通 Chat、提示词模式、
-安装、v1 清单升级和安全卸载。真实 provider 仍需要用户在自己的 API 环境中验证。
+符号链接逃逸、工具输出截断、原生搜索请求构造和网页正文清洗；功能测试覆盖普通 Chat、
+提示词模式、安装、v1 清单升级和安全卸载。真实 provider 仍需要用户在自己的 API 环境中验证。
 
 - 帮助、版本和错误参数测试。
 - 配置文件读写和 API Key 隐藏输入测试。

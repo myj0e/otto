@@ -70,6 +70,7 @@ rust-fmt: check-rust
 rust-functional-test: rust-build
 	sh ./tests/test.sh ./$(RUST_RELEASE_BINARY)
 	python3 ./tests/test_agent.py ./$(RUST_RELEASE_BINARY)
+	python3 ./tests/test_websearch.py ./$(RUST_RELEASE_BINARY)
 	sh ./tests/test_install.sh ./$(RUST_RELEASE_BINARY)
 
 test: rust-fmt rust-test rust-functional-test c-test

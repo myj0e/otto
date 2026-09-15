@@ -13,6 +13,12 @@ pub const DEFAULT_BASEURL: &str = "https://api.openai.com";
 
 #[derive(Clone, Default)]
 pub struct SearchConfig {
+    /// Search is native-first by default. Set this to `third-party` to keep
+    /// the legacy provider as the only search route.
+    pub mode: Option<String>,
+    /// Optional native protocol override. `auto` is inferred from the model
+    /// service endpoint when it is not set.
+    pub native_protocol: Option<String>,
     pub provider: Option<String>,
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
@@ -187,6 +193,10 @@ pub fn load_search(path: &Path) -> Result<(SearchConfig, bool)> {
         let value = (!value.is_empty()).then_some(value);
 
         match key.trim() {
+            "OTTO_SEARCH_MODE" | "OTTO_NATIVE_SEARCH" => config.mode = value,
+            "OTTO_NATIVE_SEARCH_PROTOCOL" | "OTTO_NATIVE_SEARCH_PROVIDER" => {
+                config.native_protocol = value
+            }
             "OTTO_SEARCH_PROVIDER" => config.provider = value,
             "OTTO_SEARCH_URL" | "OTTO_SEARCH_ENDPOINT" => config.endpoint = value,
             "OTTO_SEARCH_API_KEY" => config.api_key = value,
@@ -462,6 +472,8 @@ mod tests {
         fs::write(
             &path,
             "export OTTO_SEARCH_PROVIDER=tavily\n\
+             OTTO_SEARCH_MODE=auto\n\
+             OTTO_NATIVE_SEARCH_PROTOCOL=openai-chat\n\
              OTTO_TAVILY_API_KEY=\"test-key\"\n\
              OTTO_BIN=/tmp/legacy-launcher-target\n",
         )
@@ -469,6 +481,8 @@ mod tests {
 
         let (config, found) = load_search(&path).expect("search config loads");
         assert!(found);
+        assert_eq!(config.mode.as_deref(), Some("auto"));
+        assert_eq!(config.native_protocol.as_deref(), Some("openai-chat"));
         assert_eq!(config.provider.as_deref(), Some("tavily"));
         assert_eq!(config.tavily_api_key.as_deref(), Some("test-key"));
         assert!(config.api_key.is_none());

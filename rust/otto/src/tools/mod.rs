@@ -1,4 +1,5 @@
 mod local;
+mod native_search;
 mod web;
 
 use std::collections::HashMap;
@@ -7,34 +8,54 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
-use crate::config::SearchConfig;
+use crate::config::{Config, SearchConfig};
 use crate::error::{OttoError, Result};
 use crate::permission::PermissionManager;
 use crate::workspace::Workspace;
 
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
+pub(super) fn env_value(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
+}
+
 pub struct ToolContext<'a> {
     pub workspace: &'a Workspace,
     pub permissions: &'a mut PermissionManager,
     pub mode: Option<&'a str>,
+    pub model_config: &'a Config,
+    pub model_endpoint: &'a str,
     pub search_config: &'a SearchConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     pub content: String,
+    /// Optional terminal-only display name. This is deliberately kept separate from
+    /// `content`, which is sent back to the model as the tool result.
+    pub display_name: Option<String>,
 }
 
 impl ToolOutput {
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             content: truncate(content.into(), MAX_TOOL_OUTPUT_BYTES),
+            display_name: None,
         }
     }
 
     pub fn error(error: impl Into<String>) -> Self {
         Self::text(format!("[tool_error]\n{}", error.into()))
+    }
+
+    pub fn with_display_name(mut self, name: impl Into<String>) -> Self {
+        self.display_name = Some(name.into());
+        self
     }
 }
 
