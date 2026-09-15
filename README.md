@@ -1,14 +1,15 @@
 <p align="center">
   <img src="assets/otto-logo.png" alt="OTTO Logo" width="240">
-  <div style="text-align:center; font-weight:bold; font-size:2.5rem;">
-    One Time. Talk Once.
-  </div>
-
 </p>
+
+
+# One Time. Talk Once.
 
 OTTO 是一个运行在终端里的 AI 助手。你可以直接用自然语言提问，让它回答问题、解释代码、分析当前项目、处理文件，并在配置后搜索和阅读网页。
 
 它适合快速完成一个明确的任务：每次命令都是独立请求，不会自动混入上一次调用的内容。需要读取或修改本地文件时，OTTO 会在相应操作前请求授权。
+
+> 一个睿智的轮椅人，从眼前冲刺而过，带来智慧的哲言。但是记性不好的他，~~太阳升起时就把昨天忘掉~~下次会忘记上次的对话。
 
 ## 你可以用 OTTO 做什么
 
