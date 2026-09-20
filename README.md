@@ -320,7 +320,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### API 请求失败
 
-检查 `otto --config` 中的 Base URL、模型名称和 API Key 是否属于同一个服务，并确认该服务支持 OpenAI Chat Completions 兼容接口。
+检查 `otto --config` 中的服务名称、Base URL、模型名称和 API Key 是否属于同一个服务。DeepSeek 会自动使用 Anthropic Messages 接口；其他厂商优先匹配专用适配器，未匹配时使用 OpenAI Chat Completions 兼容兜底。
 
 ## 开发者
 
