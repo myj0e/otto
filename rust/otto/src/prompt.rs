@@ -52,13 +52,13 @@ fn read_prompt(path: &Path) -> Result<Option<String>> {
     Ok(Some(content))
 }
 
-fn mode_directory() -> Result<(PathBuf, bool)> {
+fn mode_directory() -> Result<PathBuf> {
     if let Ok(directory) = env::var("OTTO_MODE_DIR") {
         if !directory.is_empty() {
-            return Ok((PathBuf::from(directory), true));
+            return Ok(PathBuf::from(directory));
         }
     }
-    Ok((config::config_dir()?, false))
+    config::config_dir()
 }
 
 pub fn load(mode: &str) -> Result<Option<String>> {
@@ -66,14 +66,9 @@ pub fn load(mode: &str) -> Result<Option<String>> {
         return Err(OttoError::Usage(format!("模式名称无效：{mode}")));
     }
 
-    let (directory, explicit) = mode_directory()?;
+    let directory = mode_directory()?;
     let path = directory.join(format!("{mode}.md"));
-    let prompt = read_prompt(&path)?;
-    if prompt.is_some() || explicit || !matches!(mode, "system" | "otto") {
-        return Ok(prompt);
-    }
-
-    read_prompt(Path::new(".").join(format!("{mode}.md")).as_path())
+    read_prompt(&path)
 }
 
 fn active_mode_path() -> Result<PathBuf> {
