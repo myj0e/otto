@@ -6,3 +6,5 @@ core.*
 *.tmp
 /target/
 /rust/otto/target/
+# Local source-analysis artifacts
+/.source-aware/
