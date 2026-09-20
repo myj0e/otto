@@ -1,18 +1,20 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use super::env_value;
+use crate::api::{self, NativeSearchProtocol};
 use crate::config::{Config, SearchConfig};
 use crate::error::{OttoError, Result};
-use crate::http::{self, ChatEvent};
+use crate::http::{self, ApiAuth, ChatEvent};
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Protocol {
+    DeepSeekAnthropic,
     OpenAiChat,
     OpenRouterChat,
     AlibabaChat,
@@ -21,6 +23,7 @@ enum Protocol {
 impl Protocol {
     fn name(self) -> &'static str {
         match self {
+            Self::DeepSeekAnthropic => "model-native/deepseek-claude-code",
             Self::OpenAiChat => "model-native/openai-chat",
             Self::OpenRouterChat => "model-native/openrouter",
             Self::AlibabaChat => "model-native/alibaba-chat",
@@ -47,11 +50,7 @@ pub(super) fn enabled(config: &SearchConfig) -> Result<bool> {
     }
 }
 
-fn protocol(
-    search_config: &SearchConfig,
-    model_config: &Config,
-    endpoint: &str,
-) -> Result<Protocol> {
+fn protocol(search_config: &SearchConfig, model_config: &Config) -> Result<Protocol> {
     let requested = search_config
         .native_protocol
         .clone()
@@ -60,31 +59,50 @@ fn protocol(
         .to_ascii_lowercase();
 
     match requested.as_str() {
-        "" | "auto" => {
-            let identity = format!(
-                "{} {endpoint}",
-                model_config.name.as_deref().unwrap_or_default()
-            )
-            .to_ascii_lowercase();
-            if identity.contains("openrouter") {
-                Ok(Protocol::OpenRouterChat)
-            } else if identity.contains("dashscope")
-                || identity.contains("aliyuncs")
-                || identity.contains("alibaba")
+        "" | "auto" => match api::adapter_for(model_config).native_search_protocol() {
+            Some(NativeSearchProtocol::DeepSeekAnthropic) => Ok(Protocol::DeepSeekAnthropic),
+            Some(NativeSearchProtocol::OpenAiChat) => Ok(Protocol::OpenAiChat),
+            Some(NativeSearchProtocol::OpenRouterChat) => Ok(Protocol::OpenRouterChat),
+            Some(NativeSearchProtocol::AlibabaChat) => Ok(Protocol::AlibabaChat),
+            None => Err(OttoError::Tool(format!(
+                "没有为 API 厂商 {} 注册原生 websearch 适配器",
+                api::adapter_for(model_config).id()
+            ))),
+        },
+        _ => {
+            let selected = match requested.as_str() {
+                "openai" | "openai-chat" | "openai-compatible" | "chat-completions" => {
+                    Protocol::OpenAiChat
+                }
+                "deepseek" | "deepseek-anthropic" | "deepseek-claude-code" | "claude-code" => {
+                    Protocol::DeepSeekAnthropic
+                }
+                "openrouter" | "openrouter-chat" | "server-tool" => Protocol::OpenRouterChat,
+                "alibaba" | "alibaba-chat" | "dashscope" | "qwen" => Protocol::AlibabaChat,
+                _ => {
+                    return Err(OttoError::Tool(format!(
+                        "不支持的 OTTO_NATIVE_SEARCH_PROTOCOL：{requested}"
+                    )))
+                }
+            };
+            let detected = api::adapter_for(model_config).native_search_protocol();
+            if detected == Some(NativeSearchProtocol::DeepSeekAnthropic)
+                && selected != Protocol::DeepSeekAnthropic
             {
-                Ok(Protocol::AlibabaChat)
-            } else {
-                Ok(Protocol::OpenAiChat)
+                return Err(OttoError::Tool(
+                    "DeepSeek 原生搜索使用 deepseek-claude-code 协议；请移除冲突的协议覆盖"
+                        .to_owned(),
+                ));
             }
+            if selected == Protocol::DeepSeekAnthropic
+                && detected != Some(NativeSearchProtocol::DeepSeekAnthropic)
+            {
+                return Err(OttoError::Tool(
+                    "deepseek-claude-code 协议需要匹配到 DeepSeek API 适配器".to_owned(),
+                ));
+            }
+            Ok(selected)
         }
-        "openai" | "openai-chat" | "openai-compatible" | "chat-completions" => {
-            Ok(Protocol::OpenAiChat)
-        }
-        "openrouter" | "openrouter-chat" | "server-tool" => Ok(Protocol::OpenRouterChat),
-        "alibaba" | "alibaba-chat" | "dashscope" | "qwen" => Ok(Protocol::AlibabaChat),
-        _ => Err(OttoError::Tool(format!(
-            "不支持的 OTTO_NATIVE_SEARCH_PROTOCOL：{requested}"
-        ))),
     }
 }
 
@@ -101,6 +119,7 @@ struct Response {
     text: String,
     annotations: Vec<Value>,
     citations: Vec<Value>,
+    search_results: Vec<Value>,
 }
 
 fn content_text(value: &Value) -> Option<String> {
@@ -142,14 +161,47 @@ fn absorb(value: &Value, response: &mut Response) {
     append_array(&mut response.citations, value.get("citations"));
 }
 
+fn absorb_anthropic(value: &Value, response: &mut Response) {
+    let Some(blocks) = value.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    response.text.push_str(text);
+                }
+                append_array(&mut response.citations, block.get("citations"));
+            }
+            Some("web_search_tool_result") => {
+                if let Some(results) = block.get("content").and_then(Value::as_array) {
+                    response.search_results.extend(
+                        results
+                            .iter()
+                            .filter(|result| {
+                                result.get("type").and_then(Value::as_str)
+                                    == Some("web_search_result")
+                            })
+                            .cloned(),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn text_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_str))
         .filter(|value| !value.trim().is_empty())
 }
 
-fn source(value: &Value) -> Option<(String, String, String)> {
-    let source = value.get("url_citation").unwrap_or(value);
+fn source(value: &Value) -> Option<(String, String, String, Option<String>)> {
+    let source = value
+        .get("url_citation")
+        .or_else(|| value.get("web_search_result"))
+        .unwrap_or(value);
     let url = source
         .get("url")
         .or_else(|| source.get("uri"))
@@ -160,29 +212,61 @@ fn source(value: &Value) -> Option<(String, String, String)> {
     let title = text_field(source, &["title", "name"])
         .unwrap_or(url.as_str())
         .to_owned();
-    let snippet = text_field(source, &["content", "snippet", "description", "text"])
-        .unwrap_or_default()
-        .to_owned();
-    Some((url, title, snippet))
+    let snippet = text_field(
+        source,
+        &["cited_text", "content", "snippet", "description", "text"],
+    )
+    .unwrap_or_default()
+    .to_owned();
+    let published_date =
+        text_field(source, &["page_age", "published_date", "publishedAt"]).map(str::to_owned);
+    Some((url, title, snippet, published_date))
 }
 
 fn sources(response: &Response, limit: usize) -> Vec<Value> {
-    let mut seen = HashSet::new();
-    response
+    let mut indexes: HashMap<String, usize> = HashMap::new();
+    let mut normalized: Vec<(String, String, String, Option<String>)> = Vec::new();
+    for candidate in response
         .annotations
         .iter()
+        .chain(response.search_results.iter())
         .chain(response.citations.iter())
-        .filter_map(source)
-        .filter(|(url, _, _)| seen.insert(url.clone()))
+    {
+        let Some((url, title, snippet, published_date)) = source(candidate) else {
+            continue;
+        };
+        if let Some(index) = indexes.get(&url).copied() {
+            let existing = &mut normalized[index];
+            if existing.1 == existing.0 && title != url {
+                existing.1 = title;
+            }
+            if existing.2.is_empty() && !snippet.is_empty() {
+                existing.2 = snippet;
+            }
+            if existing.3.is_none() {
+                existing.3 = published_date;
+            }
+        } else {
+            indexes.insert(url.clone(), normalized.len());
+            normalized.push((url, title, snippet, published_date));
+        }
+    }
+
+    normalized
+        .into_iter()
         .take(limit)
         .enumerate()
-        .map(|(index, (url, title, snippet))| {
-            json!({
+        .map(|(index, (url, title, snippet, published_date))| {
+            let mut item = json!({
                 "id": index + 1,
                 "title": title,
                 "url": url,
                 "snippet": snippet
-            })
+            });
+            if let Some(published_date) = published_date {
+                item["published_date"] = Value::String(published_date);
+            }
+            item
         })
         .collect()
 }
@@ -194,6 +278,30 @@ fn request_body(
     count: usize,
     language: Option<&str>,
 ) -> Value {
+    if protocol == Protocol::DeepSeekAnthropic {
+        let language_instruction = language
+            .map(|language| format!("优先使用 {language} 语言的来源或用该语言概括资料。"))
+            .unwrap_or_default();
+        return json!({
+            "model": model,
+            "max_tokens": 8192,
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": format!(
+                        "请使用 web_search 工具搜索以下内容，最多整理 {count} 个相关来源。{language_instruction}\n\n<search_query>\n{query}\n</search_query>"
+                    )
+                }]
+            }],
+            "tools": [{
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": count
+            }]
+        });
+    }
+
     let language_instruction = language
         .map(|language| format!("优先使用 {language} 语言的来源或用该语言概括资料。"))
         .unwrap_or_default();
@@ -210,6 +318,7 @@ fn request_body(
     });
 
     match protocol {
+        Protocol::DeepSeekAnthropic => unreachable!(),
         Protocol::OpenAiChat => {
             body["web_search_options"] = json!({"search_context_size": "low"});
         }
@@ -238,13 +347,18 @@ pub(super) async fn search(
     count: usize,
     language: Option<&str>,
 ) -> Result<(String, Value)> {
-    let protocol = protocol(search_config, model_config, endpoint)?;
+    let protocol = protocol(search_config, model_config)?;
     let body = request_body(protocol, &model_config.model, query, count, language).to_string();
     let mut response = Response::default();
     http::chat_stream_events(
         http::ChatRequest {
             endpoint,
-            apikey: model_config.apikey.as_deref().unwrap_or_default(),
+            auth: if protocol == Protocol::DeepSeekAnthropic {
+                ApiAuth::Anthropic(model_config.apikey.as_deref().unwrap_or_default())
+            } else {
+                ApiAuth::Bearer(model_config.apikey.as_deref().unwrap_or_default())
+            },
+            accept: "application/json",
             body: &body,
             connect_timeout: Duration::from_secs(15),
             timeout: TIMEOUT,
@@ -252,7 +366,11 @@ pub(super) async fn search(
         },
         |event| match event {
             ChatEvent::Data(value) => {
-                absorb(&value, &mut response);
+                if protocol == Protocol::DeepSeekAnthropic {
+                    absorb_anthropic(&value, &mut response);
+                } else {
+                    absorb(&value, &mut response);
+                }
                 Ok(())
             }
             ChatEvent::Done => Ok(()),
@@ -260,16 +378,19 @@ pub(super) async fn search(
     )
     .await?;
 
-    if response.text.trim().is_empty() {
+    let results = sources(&response, count);
+    if results.is_empty()
+        || (protocol == Protocol::DeepSeekAnthropic && response.search_results.is_empty())
+    {
         return Err(OttoError::Api(
-            "原生 websearch 响应中没有资料内容".to_owned(),
+            "原生 websearch 响应中没有结构化搜索来源".to_owned(),
         ));
     }
 
     let result = json!({
         "provider": protocol.name(),
         "answer": response.text,
-        "results": sources(&response, count)
+        "results": results
     });
     Ok((protocol.name().to_owned(), result))
 }

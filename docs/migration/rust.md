@@ -128,7 +128,8 @@ scraper       HTML DOM 解析
 
 ### M3：迁移 Chat 和 SSE
 
-- OpenAI Chat Completions 请求。
+- 按厂商选择 API adapter：DeepSeek Anthropic Messages，以及 OpenAI-compatible 适配器和兜底。
+- 将 Anthropic 消息、工具调用和 SSE 事件归一到 Agent 的内部消息格式。
 - 普通流式文本输出。
 - HTTP 错误和 API 错误解析。
 - 超时和响应大小限制。
@@ -158,9 +159,9 @@ Glob → Grep → Read → 权限 → edit → write → hash/diff/atomic write
 ### M6：websearch
 
 - 定义原生优先的搜索路由：模型原生搜索成功时不触发第三方请求。
-- 通过 OpenAI-compatible Chat Completions 调用模型原生搜索，并适配 OpenAI、OpenRouter
-  和阿里云/Qwen 的请求形态。
-- 原生搜索失败时再进入 `SearchProvider` trait。
+- 将 OpenAI、OpenRouter、阿里云/Qwen 和 DeepSeek 的原生搜索协议关联到各自 API adapter。
+- DeepSeek 通过 Anthropic Messages 的 `web_search_20250305` 服务端工具搜索，并要求返回结构化来源。
+- 没有有效来源或原生调用失败时进入第三方搜索 provider。
 - 保留并实现 Brave、SearXNG 和 Tavily provider，并默认使用 `basic` 搜索深度控制额度消耗。
 - 由原生 `otto` 读取 `search.env`，不依赖 shell 启动器传递配置。
 - 统一搜索结果结构。

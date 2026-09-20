@@ -16,9 +16,16 @@ pub enum ChatEvent {
     Done,
 }
 
+#[derive(Clone, Copy)]
+pub enum ApiAuth<'a> {
+    Bearer(&'a str),
+    Anthropic(&'a str),
+}
+
 pub struct ChatRequest<'a> {
     pub endpoint: &'a str,
-    pub apikey: &'a str,
+    pub auth: ApiAuth<'a>,
+    pub accept: &'a str,
     pub body: &'a str,
     pub connect_timeout: Duration,
     pub timeout: Duration,
@@ -81,7 +88,7 @@ where
     Ok(())
 }
 
-fn event_content(value: &Value) -> Option<&str> {
+pub fn event_content(value: &Value) -> Option<&str> {
     let choice = value.get("choices")?.as_array()?.first()?;
     choice
         .get("delta")
@@ -106,11 +113,17 @@ where
         .build()
         .map_err(|error| OttoError::Network(error.to_string()))?;
 
-    let response = client
+    let mut builder = client
         .post(request.endpoint)
-        .bearer_auth(request.apikey)
         .header(CONTENT_TYPE, "application/json")
-        .header(ACCEPT, "text/event-stream")
+        .header(ACCEPT, request.accept);
+    builder = match request.auth {
+        ApiAuth::Bearer(api_key) => builder.bearer_auth(api_key),
+        ApiAuth::Anthropic(api_key) => builder
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
+    };
+    let response = builder
         .body(request.body.to_owned())
         .send()
         .await
@@ -196,28 +209,6 @@ where
         dispatch_event(&mut event_data, &mut dispatch)?;
     }
 
-    Ok(())
-}
-
-pub async fn chat_stream<F>(request: ChatRequest<'_>, mut on_content: F) -> Result<()>
-where
-    F: FnMut(&str) -> Result<()>,
-{
-    let mut wrote_anything = false;
-    chat_stream_events(request, |event| match event {
-        ChatEvent::Data(value) => {
-            if let Some(content) = event_content(&value) {
-                on_content(content)?;
-                wrote_anything = true;
-            }
-            Ok(())
-        }
-        ChatEvent::Done => Ok(()),
-    })
-    .await?;
-    if !wrote_anything {
-        return Err(OttoError::Api("API 响应中没有回答内容".to_owned()));
-    }
     Ok(())
 }
 

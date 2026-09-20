@@ -1,4 +1,5 @@
 mod agent;
+mod api;
 mod cli;
 mod config;
 mod error;
@@ -18,18 +19,6 @@ use cli::{CliOptions, Command};
 use error::{OttoError, Result};
 
 const VERSION: &str = "1.0.0";
-
-fn build_endpoint(baseurl: &str) -> Result<String> {
-    let trimmed = baseurl.trim_end_matches('/');
-    if trimmed.ends_with("/chat/completions") {
-        return Ok(trimmed.to_owned());
-    }
-    if trimmed.ends_with("/v1") {
-        Ok(format!("{trimmed}/chat/completions"))
-    } else {
-        Ok(format!("{trimmed}/v1/chat/completions"))
-    }
-}
 
 fn handle_mode(options: &CliOptions) -> Result<()> {
     if options.mode.is_none() {
@@ -114,7 +103,8 @@ async fn ask(options: &CliOptions) -> Result<()> {
     config::validate(&config)?;
 
     let (system_prompt, mode_name) = load_prompts(options)?;
-    let endpoint = build_endpoint(config.baseurl.as_deref().unwrap_or_default())?;
+    let adapter = api::adapter_for(&config);
+    let endpoint = adapter.endpoint(&config)?;
 
     if !options.no_agent {
         let search_config_path = config::search_config_path()?;
@@ -131,39 +121,46 @@ async fn ask(options: &CliOptions) -> Result<()> {
         .await;
     }
 
-    let body = serde_json::json!({
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question}
-        ],
-        "stream": true
-    })
-    .to_string();
+    let messages = vec![
+        serde_json::json!({"role": "system", "content": system_prompt}),
+        serde_json::json!({"role": "user", "content": question}),
+    ];
+    let body = adapter.request_body(&config, &messages, &[])?;
 
     let mut wrote_anything = false;
     let mut last_was_newline = false;
     let mut stdout = io::stdout();
-    http::chat_stream(
+    http::chat_stream_events(
         http::ChatRequest {
             endpoint: &endpoint,
-            apikey: config.apikey.as_deref().unwrap_or_default(),
+            auth: adapter.auth(config.apikey.as_deref().unwrap_or_default()),
+            accept: "text/event-stream",
             body: &body,
             connect_timeout: Duration::from_secs(15),
             timeout: Duration::from_secs(120),
             max_response_bytes: 16 * 1024 * 1024,
         },
-        |content| {
-            stdout.write_all(content.as_bytes())?;
-            stdout.flush()?;
-            wrote_anything = true;
-            last_was_newline = content.ends_with('\n');
-            Ok(())
+        |event| match event {
+            http::ChatEvent::Data(value) => {
+                if let Some(normalized) = adapter.normalize_event(&value) {
+                    if let Some(content) = http::event_content(&normalized) {
+                        stdout.write_all(content.as_bytes())?;
+                        stdout.flush()?;
+                        wrote_anything = true;
+                        last_was_newline = content.ends_with('\n');
+                    }
+                }
+                Ok(())
+            }
+            http::ChatEvent::Done => Ok(()),
         },
     )
     .await?;
 
-    if !wrote_anything || !last_was_newline {
+    if !wrote_anything {
+        return Err(OttoError::Api("API 响应中没有回答内容".to_owned()));
+    }
+    if !last_was_newline {
         stdout.write_all(b"\n")?;
         stdout.flush()?;
     }

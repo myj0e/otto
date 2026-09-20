@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::api;
 use crate::config::{Config, SearchConfig};
 use crate::error::{OttoError, Result};
 use crate::http::{self, ChatEvent};
@@ -16,7 +17,6 @@ use crate::workspace::Workspace;
 const MAX_AGENT_ROUNDS: usize = 8;
 const MAX_TOOL_CALLS: usize = 32;
 const MAX_MESSAGES: usize = 64;
-const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 const AGENT_INSTRUCTIONS: &str = r#"
 你现在处于 OTTO 的单轮 Agent 执行环境。你可以在需要时调用提供的工具，再根据工具结果继续处理，直到足以给出最终回答。
@@ -171,21 +171,6 @@ fn parse_arguments(arguments: &str) -> Value {
     })
 }
 
-fn request_body(config: &Config, messages: &[Value], tools: &[Value]) -> Result<String> {
-    let body = json!({
-        "model": config.model,
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
-        "stream": true
-    })
-    .to_string();
-    if body.len() > MAX_MESSAGE_BYTES {
-        return Err(OttoError::Limit("Agent 消息总大小超过 8 MiB".to_owned()));
-    }
-    Ok(body)
-}
-
 pub async fn run(
     config: &Config,
     search_config: &SearchConfig,
@@ -195,6 +180,7 @@ pub async fn run(
     workspace_root: Option<&Path>,
     mode: Option<&str>,
 ) -> Result<()> {
+    let adapter = api::adapter_for(config);
     let workspace = Workspace::new(workspace_root)?;
     let registry = ToolRegistry::default();
     let mut permissions = PermissionManager::default();
@@ -215,25 +201,29 @@ pub async fn run(
         if messages.len() > MAX_MESSAGES {
             return Err(OttoError::Limit("Agent 消息轮数超过限制".to_owned()));
         }
-        let body = request_body(config, &messages, &tools)?;
+        let body = adapter.request_body(config, &messages, &tools)?;
         let mut turn = AssistantTurn::default();
         http::chat_stream_events(
             http::ChatRequest {
                 endpoint,
-                apikey: config.apikey.as_deref().unwrap_or_default(),
+                auth: adapter.auth(config.apikey.as_deref().unwrap_or_default()),
+                accept: "text/event-stream",
                 body: &body,
                 connect_timeout: Duration::from_secs(15),
                 timeout: Duration::from_secs(120),
                 max_response_bytes: 16 * 1024 * 1024,
             },
             |event| match event {
-                ChatEvent::Data(value) => absorb_value(
-                    &value,
-                    &mut turn,
-                    &mut stdout,
-                    &mut wrote_anything,
-                    &mut last_was_newline,
-                ),
+                ChatEvent::Data(value) => match adapter.normalize_event(&value) {
+                    Some(value) => absorb_value(
+                        &value,
+                        &mut turn,
+                        &mut stdout,
+                        &mut wrote_anything,
+                        &mut last_was_newline,
+                    ),
+                    None => Ok(()),
+                },
                 ChatEvent::Done => Ok(()),
             },
         )

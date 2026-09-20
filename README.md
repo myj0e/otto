@@ -68,13 +68,16 @@ otto --config
 - API Key：对应服务的密钥，输入时不会在终端显示。
 - 模型名称：服务提供的实际模型名。
 
-OTTO 使用 OpenAI Chat Completions 兼容接口。Base URL 可以填写服务根地址、`/v1` 地址，或完整的 `/chat/completions` 地址。例如：
+OTTO 按厂商选择 API 适配器。DeepSeek 会根据服务名称或域名自动选择 Anthropic Messages（Claude Code 兼容）接口；其他已识别厂商使用各自适配器，未识别的服务走 OpenAI Chat Completions 兼容兜底。Base URL 可以填写服务根地址或完整接口地址。例如：
 
 ```text
 https://api.openai.com
 https://api.siliconflow.cn/v1
 https://api.siliconflow.cn/v1/chat/completions
+https://api.deepseek.com
 ```
+
+DeepSeek 适配器会将根地址映射到 `https://api.deepseek.com/anthropic/v1/messages`，并使用同一接口执行原生 Web Search。也可以把 Base URL 写成 `https://api.deepseek.com/anthropic`。
 
 ### 4. 开始使用
 
@@ -123,10 +126,12 @@ otto --root ~/projects/demo "检查这个项目的配置问题"
 
 ## 联网搜索
 
-`websearch` 默认优先调用当前模型服务的原生联网搜索能力。原生接口不可用、模型不支持，
-或原生请求失败时，才会使用配置的第三方搜索服务兜底。当前自动识别 OpenAI-compatible
-的 OpenAI、OpenRouter 和阿里云/Qwen 搜索协议；其他兼容服务会先尝试标准的
-`web_search_options`。
+`websearch` 默认优先调用已匹配的厂商原生联网搜索适配器；适配器不可用、响应没有结构化来源，
+或原生请求失败时，才会使用配置的第三方搜索服务兜底。DeepSeek 使用 Anthropic Messages
+接口中的 `web_search_20250305` 服务端工具，因此不需要另配搜索 API Key；搜索调用会产生
+DeepSeek API 的额外模型 Token 费用。OpenAI、OpenRouter 和阿里云/Qwen 使用各自的搜索请求格式。
+未匹配的厂商使用 OpenAI-compatible 搜索格式作为通用适配器；如果服务不支持或没有返回结构化来源，
+会继续尝试已配置的第三方搜索服务，不会把普通模型回复当作搜索成功。
 
 配置保存在 `$XDG_CONFIG_HOME/otto/search.env`，未设置 `XDG_CONFIG_HOME` 时默认是 `~/.config/otto/search.env`。
 
@@ -162,7 +167,7 @@ OTTO_SEARCH_MODE=third-party
 自动识别失败或使用自定义网关时，可以显式指定原生协议：
 
 ```env
-# openai-chat、openrouter 或 alibaba-chat
+# deepseek-claude-code、openai-chat、openrouter 或 alibaba-chat
 OTTO_NATIVE_SEARCH_PROTOCOL=openai-chat
 ```
 
