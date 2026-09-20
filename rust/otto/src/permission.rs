@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use crate::error::{OttoError, Result};
 use crate::ui::{self, AuthorizationChoice};
 
+const DEFAULT_ALLOWED_READ_TOOLS: [&str; 3] = ["glob", "grep", "read"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
     Read,
@@ -23,6 +25,11 @@ impl PermissionManager {
         action: &str,
     ) -> Result<()> {
         let tool_name = tool_name.to_ascii_lowercase();
+        if capability == Capability::Read
+            && DEFAULT_ALLOWED_READ_TOOLS.contains(&tool_name.as_str())
+        {
+            return Ok(());
+        }
         if self.allowed_tools.contains(&tool_name) {
             return Ok(());
         }
@@ -63,7 +70,17 @@ impl Capability {
 
 #[cfg(test)]
 mod tests {
-    use super::PermissionManager;
+    use super::{Capability, PermissionManager};
+
+    #[test]
+    fn allows_default_read_tools_without_authorization() {
+        let mut permissions = PermissionManager::default();
+        for tool_name in ["glob", "grep", "read"] {
+            permissions
+                .authorize(tool_name, Capability::Read, None, "读取 workspace")
+                .expect("default read tool should be allowed");
+        }
+    }
 
     #[test]
     fn remembers_only_the_specific_tool() {

@@ -188,7 +188,6 @@ def main():
             os.close(slave)
 
             output = bytearray()
-            authorized = False
             streamed_before_first_response_finished = False
             deadline = time.monotonic() + 10
             try:
@@ -206,12 +205,6 @@ def main():
                     ):
                         streamed_before_first_response_finished = True
                         continue_event.set()
-                    if (
-                        not authorized
-                        and "授权选择 [1/2/3]: ".encode() in output
-                    ):
-                        os.write(master, b"2\n")
-                        authorized = True
             finally:
                 continue_event.set()
                 if process.poll() is None:
@@ -223,8 +216,10 @@ def main():
                 raise AssertionError(
                     f"agent exited with {process.returncode}: {output!r}"
                 )
-            if not authorized:
-                raise AssertionError(f"read authorization prompt was not shown: {output!r}")
+            if "授权选择 [1/2/3]: ".encode() in output:
+                raise AssertionError(
+                    f"read-only tool unexpectedly requested authorization: {output!r}"
+                )
             if b"mock agent final" not in output:
                 raise AssertionError(f"final answer was not printed: {output!r}")
             if not streamed_before_first_response_finished:
