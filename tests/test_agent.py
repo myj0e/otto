@@ -256,6 +256,54 @@ def main():
                 '{"path":"note.txt"}'
             )
             assert "agent secret" in tool_result["content"]
+
+            limited_environment = environment.copy()
+            limited_environment["OTTO_MAX_AGENT_ROUNDS"] = "1"
+            limited = subprocess.run(
+                [binary, "读取 note.txt"],
+                cwd=workspace,
+                env=limited_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if limited.returncode != 5:
+                raise AssertionError(
+                    f"configured Agent round limit was not enforced: {limited.returncode}, "
+                    f"stderr={limited.stderr!r}"
+                )
+            if "最大轮数".encode() not in limited.stderr:
+                raise AssertionError(
+                    f"configured Agent round limit returned the wrong error: {limited.stderr!r}"
+                )
+            if len(requests) != 3:
+                raise AssertionError(
+                    f"one-round Agent should make one request, got {len(requests)} total"
+                )
+
+            unlimited_environment = environment.copy()
+            unlimited_environment["OTTO_MAX_AGENT_ROUNDS"] = "0"
+            unlimited = subprocess.run(
+                [binary, "读取 note.txt"],
+                cwd=workspace,
+                env=unlimited_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if unlimited.returncode != 0:
+                raise AssertionError(
+                    f"zero Agent round limit should mean unlimited: {unlimited.returncode}, "
+                    f"stderr={unlimited.stderr!r}"
+                )
+            if b"mock agent final" not in unlimited.stdout:
+                raise AssertionError(
+                    f"unlimited Agent did not finish: {unlimited.stdout!r}"
+                )
+            if len(requests) != 5:
+                raise AssertionError(
+                    f"unlimited Agent should make two requests, got {len(requests) - 3}"
+                )
     finally:
         server.shutdown()
         thread.join(timeout=2)

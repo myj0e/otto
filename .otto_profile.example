@@ -1,0 +1,19 @@
+# OTTO 运行时环境配置示例
+#
+# 使用前复制到用户目录：
+#   cp .otto_profile.example ~/.otto_profile
+#
+# 然后在 ~/.profile 或 ~/.bashrc 中加入：
+#   [ -f "$HOME/.otto_profile" ] && . "$HOME/.otto_profile"
+#
+# 这里适合放非敏感的运行时设置。API Key 请继续通过 `otto --config` 或
+# ~/.config/otto/config、~/.config/otto/search.env 管理，不要提交到此文件。
+
+# 每次请求最多允许多少轮“模型响应 → 工具调用 → 工具结果”。默认 8，范围 0–255。
+# 设置为 0 表示不限制轮数（仍受工具调用次数和消息大小等保护限制）。
+export OTTO_MAX_AGENT_ROUNDS=8
+
+# 可选路径覆盖：
+# export OTTO_CONFIG="$HOME/.config/otto/config"
+# export OTTO_MODE_DIR="$HOME/.config/otto"
+# export OTTO_SEARCH_CONFIG="$HOME/.config/otto/search.env"

@@ -217,6 +217,27 @@ otto --mode reviewer
 
 模式文件的内容会作为额外提示词附加到 `system.md` 后面。
 
+### 运行时环境变量
+
+Agent 每次请求默认最多执行 8 轮模型响应和工具调用。可以通过
+`OTTO_MAX_AGENT_ROUNDS` 调整，允许范围是 0–255；设置为 0 表示不限制轮数：
+
+```bash
+export OTTO_MAX_AGENT_ROUNDS=16
+otto "检查这个项目的实现"
+```
+
+为方便管理，可以复制仓库中的 `.otto_profile.example` 为 `~/.otto_profile`，
+集中放置 Otto 的运行时环境变量，再在 `~/.profile` 或 `~/.bashrc` 中引用整个文件：
+
+```bash
+[ -f "$HOME/.otto_profile" ] && . "$HOME/.otto_profile"
+```
+
+profile 文件只建议存放非敏感设置；API Key 继续使用 `otto --config` 和
+`~/.config/otto/search.env` 管理。当前支持的路径覆盖变量包括 `OTTO_CONFIG`、
+`OTTO_MODE_DIR` 和 `OTTO_SEARCH_CONFIG`。
+
 ## 配置文件
 
 默认配置位于：

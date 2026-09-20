@@ -248,6 +248,7 @@ pub fn print_help() {
     println!("  普通请求默认加载 system.md，并附加当前保存的模式。");
     println!("  请求默认使用 SSE 流式输出。");
     println!("  Agent 默认启用；--no-agent 可仅发送普通 Chat 请求。");
+    println!("  Agent 最大执行轮数可通过 OTTO_MAX_AGENT_ROUNDS 设置（默认 8，范围 0-255，0 表示不限制）。");
 }
 
 #[cfg(test)]

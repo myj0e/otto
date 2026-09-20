@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::api;
-use crate::config::{Config, SearchConfig};
+use crate::config::{self, Config, SearchConfig};
 use crate::error::{OttoError, Result};
 use crate::http::{self, ChatEvent};
 use crate::permission::PermissionManager;
@@ -14,7 +14,6 @@ use crate::tools::{ToolContext, ToolRegistry};
 use crate::ui;
 use crate::workspace::Workspace;
 
-const MAX_AGENT_ROUNDS: usize = 8;
 const MAX_TOOL_CALLS: usize = 32;
 const MAX_MESSAGES: usize = 64;
 
@@ -180,6 +179,7 @@ pub async fn run(
     workspace_root: Option<&Path>,
     mode: Option<&str>,
 ) -> Result<()> {
+    let max_agent_rounds = config::max_agent_rounds()?;
     let adapter = api::adapter_for(config);
     let workspace = Workspace::new(workspace_root)?;
     let registry = ToolRegistry::default();
@@ -196,8 +196,9 @@ pub async fn run(
     let mut wrote_anything = false;
     let mut last_was_newline = false;
     let mut stdout = io::stdout();
+    let mut round = 0usize;
 
-    for round in 0..MAX_AGENT_ROUNDS {
+    loop {
         if messages.len() > MAX_MESSAGES {
             return Err(OttoError::Limit("Agent 消息轮数超过限制".to_owned()));
         }
@@ -291,14 +292,15 @@ pub async fn run(
             ui::print_tool_summary(&displayed_tool_names);
         }
 
-        if round + 1 == MAX_AGENT_ROUNDS {
-            return Err(OttoError::Limit(
-                "Agent 未能在最大轮数内完成回答".to_owned(),
-            ));
+        if let Some(max_agent_rounds) = max_agent_rounds {
+            if round.saturating_add(1) == max_agent_rounds {
+                return Err(OttoError::Limit(
+                    "Agent 未能在最大轮数内完成回答".to_owned(),
+                ));
+            }
         }
+        round = round.saturating_add(1);
     }
-
-    Err(OttoError::Limit("Agent 未能完成回答".to_owned()))
 }
 
 #[cfg(test)]

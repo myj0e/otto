@@ -10,6 +10,9 @@ use crate::error::{OttoError, Result};
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_NAME: &str = "Openai";
 pub const DEFAULT_BASEURL: &str = "https://api.openai.com";
+pub const DEFAULT_MAX_AGENT_ROUNDS: usize = 8;
+pub const MAX_CONFIGURED_AGENT_ROUNDS: usize = 255;
+const MAX_AGENT_ROUNDS_ENV: &str = "OTTO_MAX_AGENT_ROUNDS";
 
 #[derive(Clone, Default)]
 pub struct SearchConfig {
@@ -32,6 +35,30 @@ pub struct Config {
     pub baseurl: Option<String>,
     pub apikey: Option<String>,
     pub model: String,
+}
+
+fn parse_max_agent_rounds(raw_value: &str) -> Result<Option<usize>> {
+    let value = raw_value.trim().parse::<usize>().map_err(|_| {
+        OttoError::Config(format!(
+            "环境变量 {MAX_AGENT_ROUNDS_ENV} 必须是 0 到 {MAX_CONFIGURED_AGENT_ROUNDS} 之间的整数"
+        ))
+    })?;
+    if value > MAX_CONFIGURED_AGENT_ROUNDS {
+        return Err(OttoError::Config(format!(
+            "环境变量 {MAX_AGENT_ROUNDS_ENV} 必须是 0 到 {MAX_CONFIGURED_AGENT_ROUNDS} 之间的整数"
+        )));
+    }
+    Ok((value != 0).then_some(value))
+}
+
+pub fn max_agent_rounds() -> Result<Option<usize>> {
+    match env::var(MAX_AGENT_ROUNDS_ENV) {
+        Ok(value) => parse_max_agent_rounds(&value),
+        Err(env::VarError::NotPresent) => Ok(Some(DEFAULT_MAX_AGENT_ROUNDS)),
+        Err(env::VarError::NotUnicode(_)) => Err(OttoError::Config(format!(
+            "环境变量 {MAX_AGENT_ROUNDS_ENV} 不是有效的 UTF-8 文本"
+        ))),
+    }
 }
 
 impl Default for Config {
@@ -463,7 +490,17 @@ pub fn interactive(path: &Path) -> Result<()> {
 mod tests {
     use std::fs;
 
-    use super::load_search;
+    use super::{load_search, parse_max_agent_rounds};
+
+    #[test]
+    fn validates_configured_agent_rounds() {
+        assert_eq!(parse_max_agent_rounds("0").expect("unlimited"), None);
+        assert_eq!(parse_max_agent_rounds("1").expect("minimum"), Some(1));
+        assert_eq!(parse_max_agent_rounds(" 16 ").expect("trimmed"), Some(16));
+        assert_eq!(parse_max_agent_rounds("255").expect("maximum"), Some(255));
+        assert!(parse_max_agent_rounds("256").is_err());
+        assert!(parse_max_agent_rounds("many").is_err());
+    }
 
     #[test]
     fn loads_native_search_env_without_executing_shell() {
