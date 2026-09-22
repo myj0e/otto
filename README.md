@@ -2,73 +2,74 @@
   <img src="assets/otto-logo.png" alt="OTTO Logo" width="240">
 </p>
 
+[简体中文](README.zh-CN.md)
 
 # One Time. Talk Once.
 
-OTTO 是一个运行在终端里的 AI 助手。你可以直接用自然语言提问，让它回答问题、解释代码、分析当前项目、处理文件，并在配置后搜索和阅读网页。
+OTTO is an AI assistant that runs in your terminal. Ask questions in natural language to get answers, explain code, analyze the current project, work with files, and search or read web pages after configuration.
 
-它适合快速完成一个明确的任务：每次命令都是独立请求，不会自动混入上一次调用的内容。修改本地文件时，OTTO 会在操作前请求授权；查找和读取文件默认允许执行。
+It is designed for one clear task at a time: every command is an independent request and does not automatically include content from previous calls. OTTO asks for authorization before modifying local files; file discovery and reads are allowed by default.
 
-> 一个睿智的轮椅人，从眼前冲刺而过，带来智慧的哲言。但是记性不好的他，~~太阳升起时就把昨天忘掉~~下次会忘记上次的对话。
+> A wise man in a wheelchair speeds past, bringing words of wisdom. Unfortunately, his memory is unreliable: ~~at sunrise he forgets yesterday~~ next time he will forget this conversation.
 
-## 你可以用 OTTO 做什么
+## What you can do with OTTO
 
-- 解释报错、命令和代码，帮助定位问题。
-- 阅读当前项目中的文件，查找相关代码并总结结构。
-- 在获得授权后创建、修改或整理文件。
-- 配置联网搜索，查找最新资料、文档和网页内容。
-- 通过不同的模式调整回答风格，例如技术评审、简洁回答或角色化表达。
-- 将回答直接交给其他命令或脚本继续处理。
+- Explain errors, commands, and code to help locate problems.
+- Read files in the current project, find related code, and summarize its structure.
+- Create, modify, or organize files after authorization.
+- Configure web search to find current information, documentation, and web pages.
+- Adjust the response style with modes such as technical review, concise answers, or character-driven responses.
+- Pipe answers directly into other commands or scripts.
 
-## 快速开始
+## Quick start
 
-### 1. 安装依赖
+### 1. Install dependencies
 
-OTTO 需要 Rust 工具链和 `make`。如果还没有 Rust，可以使用 rustup 安装：
+OTTO requires the Rust toolchain and `make`. If Rust is not installed, use rustup:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 ```
 
-### 2. 编译并安装
+### 2. Build and install
 
-在 OTTO 项目目录中执行：
+Run this in the OTTO project directory:
 
 ```bash
 make
 make install
 ```
 
-默认安装到当前用户目录，不需要 `sudo`：
+The default installation is per-user and does not require `sudo`:
 
 ```text
-可执行文件：~/.local/bin/otto
-配置目录：  ~/.config/otto/
+Binary:  ~/.local/bin/otto
+Config:  ~/.config/otto/
 ```
 
-如果终端提示找不到 `otto`，可以只为当前 shell 添加路径：
+If the terminal cannot find `otto`, add the binary directory to the current shell's `PATH`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### 3. 配置模型服务
+### 3. Configure a model service
 
-首次使用前运行：
+Run this before the first request:
 
 ```bash
 otto --config
 ```
 
-按照提示输入：
+Follow the prompts:
 
-- 服务名称：任意便于识别的名称。
-- Base URL：模型服务地址。
-- API Key：对应服务的密钥，输入时不会在终端显示。
-- 模型名称：服务提供的实际模型名。
+- Service name: any name that is easy to recognize.
+- Base URL: the model service endpoint.
+- API key: the key for that service; it is not displayed while typing.
+- Model name: the actual model name provided by the service.
 
-OTTO 按厂商选择 API 适配器。DeepSeek 会根据服务名称或域名自动选择 Anthropic Messages（Claude Code 兼容）接口；其他已识别厂商使用各自适配器，未识别的服务走 OpenAI Chat Completions 兼容兜底。Base URL 可以填写服务根地址或完整接口地址。例如：
+OTTO selects an API adapter based on the provider. DeepSeek automatically uses the Anthropic Messages (Claude Code-compatible) API based on the service name or domain. Other recognized providers use their dedicated adapters; unknown services use the OpenAI Chat Completions-compatible fallback. The Base URL can be a service root or a complete endpoint, for example:
 
 ```text
 https://api.openai.com
@@ -77,199 +78,207 @@ https://api.siliconflow.cn/v1/chat/completions
 https://api.deepseek.com
 ```
 
-DeepSeek 适配器会将根地址映射到 `https://api.deepseek.com/anthropic/v1/messages`，并使用同一接口执行原生 Web Search。也可以把 Base URL 写成 `https://api.deepseek.com/anthropic`。
+The DeepSeek adapter maps the root URL to `https://api.deepseek.com/anthropic/v1/messages` and uses the same interface for native web search. You can also set the Base URL to `https://api.deepseek.com/anthropic`.
 
-### 4. 开始使用
-
-```bash
-otto "解释一下这个项目是做什么的"
-otto "帮我分析当前项目最近的错误"
-```
-
-直接运行源码构建出的程序时，也可以使用：
+### 4. Start using OTTO
 
 ```bash
-target/release/otto "你好"
+otto "Explain what this project does"
+otto "Analyze the most recent errors in this project"
 ```
 
-## 常用命令
+You can also run the binary built from source directly:
 
-| 命令 | 用途 |
+```bash
+target/release/otto "Hello"
+```
+
+## Common commands
+
+| Command | Purpose |
 | --- | --- |
-| `otto "问题"` | 提问并完成任务。 |
-| `otto --help` | 查看完整帮助。 |
-| `otto --version` | 查看版本。 |
-| `otto --no-agent "问题"` | 只进行普通问答，不让程序操作工具。 |
-| `otto --no-stdin "问题"` | 忽略管道或重定向传入的标准输入。 |
-| `otto --root DIR "问题"` | 指定本次任务可以访问的项目目录。 |
-| `otto --mode NAME` | 设置默认回答模式。 |
-| `otto --mode` | 清除默认模式。 |
-| `otto --mode NAME "问题"` | 只为本次请求使用指定模式。 |
-| `otto --mode -- "问题"` | 本次请求不使用可选模式。 |
+| `otto "QUESTION"` | Ask a question and complete the task. |
+| `otto -h` / `otto --help` | Show full help. |
+| `otto -V` / `otto --version` | Show the version. |
+| `otto -A "QUESTION"` / `otto --no-agent "QUESTION"` | Use ordinary chat without tool execution. |
+| `otto -S "QUESTION"` / `otto --no-stdin "QUESTION"` | Ignore piped or redirected standard input. |
+| `otto -r DIR "QUESTION"` / `otto --root DIR "QUESTION"` | Set the project directory available to this request. |
+| `otto -m NAME` / `otto --mode NAME` | Set the default response mode. |
+| `otto -m` / `otto --mode` | Clear the default mode. |
+| `otto -m NAME "QUESTION"` / `otto --mode NAME "QUESTION"` | Use a mode for this request only. |
+| `otto -m -- "QUESTION"` / `otto --mode -- "QUESTION"` | Disable the optional mode for this request. |
+| `otto -c` / `otto --config` | Enter model service configuration. |
 
-问题参数可以直接写成多个单词，OTTO 会自动用空格拼接：
+Configuration options also have short forms: `-n/--name`, `-b/--baseurl` (also accepting `--base-url`), `-k/--apikey` (also accepting `--api-key`), and `-M/--model`. Options with values accept both separated and equals forms, for example `-b https://example.test/v1` or `-b=https://example.test/v1`.
 
-```bash
-otto 请解释这个函数为什么返回错误
-```
-
-命令行选项必须写在问题之前。解析器遇到第一个问题参数后，就会进入问题模式；该参数以及后续所有参数都会被当作问题内容，用空格拼接，不再解析为 OTTO 选项。因此，下面的写法会完整询问 `python -m` 的含义：
+Question arguments can be written as multiple words; OTTO joins them with spaces:
 
 ```bash
-otto python -m 这个指令是什么意思
+otto explain why this function returns an error
 ```
 
-问题开始后，即使后续参数看起来像选项，也会保留为问题文本：
+Options must appear before the question. Once the parser encounters the first positional question argument, that argument and every argument after it become question content and are no longer parsed as OTTO options. This preserves the complete meaning of a command such as:
 
 ```bash
-otto 解释这段命令 --no-agent
+otto python -m "What does this command mean?"
 ```
 
-如果问题的第一个参数本身以 `-` 开头，请先使用 `--` 结束选项：
+Even strings that look like options remain question text after the question starts:
 
 ```bash
-otto -- -m 这个参数是什么意思
+otto explain this command --no-agent
 ```
 
-## 让 OTTO 使用文件和项目
-
-默认情况下，OTTO 将当前目录作为本次任务的工作区。你可以让它查找文件、阅读代码、总结项目，或在授权后编辑文件：
+If the first question argument itself starts with `-`, use `--` to end option parsing:
 
 ```bash
-otto "找出所有处理用户登录的文件，并说明调用关系"
-otto --root ~/projects/demo "检查这个项目的配置问题"
+otto -- -m "What does this argument mean?"
 ```
 
-`glob`、`grep` 和 `read` 属于默认允许的只读工具，不会在执行前询问；`edit` 和 `write` 修改文件时仍会请求授权。OTTO 只会在当前工作区范围内处理相对路径。
+## Working with files and projects
 
-## 联网搜索
+By default, OTTO uses the current directory as the workspace for the request. It can search for files, read code, summarize a project, and edit files after authorization:
 
-`websearch` 默认优先调用已匹配的厂商原生联网搜索适配器；适配器不可用、响应没有结构化来源，
-或原生请求失败时，才会使用配置的第三方搜索服务兜底。DeepSeek 使用 Anthropic Messages
-接口中的 `web_search_20250305` 服务端工具，因此不需要另配搜索 API Key；搜索调用会产生
-DeepSeek API 的额外模型 Token 费用。OpenAI、OpenRouter 和阿里云/Qwen 使用各自的搜索请求格式。
-未匹配的厂商使用 OpenAI-compatible 搜索格式作为通用适配器；如果服务不支持或没有返回结构化来源，
-会继续尝试已配置的第三方搜索服务，不会把普通模型回复当作搜索成功。
+```bash
+otto "Find every file that handles user login and explain the call relationships"
+otto --root ~/projects/demo "Check this project's configuration"
+```
 
-配置保存在 `$XDG_CONFIG_HOME/otto/search.env`，未设置 `XDG_CONFIG_HOME` 时默认是 `~/.config/otto/search.env`。
+`glob`, `grep`, and `read` are read-only tools allowed by default and do not ask for authorization. `edit` and `write` still ask before changing files. OTTO only handles relative paths inside the current workspace.
 
-如果模型服务本身支持原生搜索，可以不创建此文件。需要第三方兜底时，以下配置任选一种：
+## Web search
 
-Tavily：
+`websearch` first tries the matched provider's native search adapter. It falls back to the configured third-party search service only when the adapter is unavailable, the response has no structured sources, or the native request fails. DeepSeek uses the `web_search_20250305` server-side tool in its Anthropic Messages API and therefore needs no separate search API key; search calls incur additional DeepSeek model-token charges. OpenAI, OpenRouter, and Alibaba/Qwen use their respective search request formats. Unknown providers use an OpenAI-compatible search format; if the service does not support it or returns no structured sources, OTTO continues with the configured third-party service instead of treating an ordinary model response as a successful search.
+
+The configuration is stored in `$XDG_CONFIG_HOME/otto/search.env`, or `~/.config/otto/search.env` when `XDG_CONFIG_HOME` is not set.
+
+If the model service supports native search, this file is optional. For third-party fallback, configure one of the following:
+
+Tavily:
 
 ```env
 OTTO_SEARCH_PROVIDER=tavily
-OTTO_TAVILY_API_KEY=你的 Tavily API Key
+OTTO_TAVILY_API_KEY=your Tavily API key
 ```
 
-Brave Search：
+Brave Search:
 
 ```env
 OTTO_SEARCH_PROVIDER=brave
-OTTO_BRAVE_API_KEY=你的 Brave API Key
+OTTO_BRAVE_API_KEY=your Brave API key
 ```
 
-自建或可信的 SearXNG：
+Self-hosted or trusted SearXNG:
 
 ```env
 OTTO_SEARCH_PROVIDER=searxng
 OTTO_SEARCH_URL=https://your-searxng.example/search
 ```
 
-搜索策略默认是原生优先、第三方兜底。如需临时或永久只使用第三方服务：
+The default strategy is native-first with third-party fallback. To use only the third-party service temporarily or permanently:
 
 ```env
 OTTO_SEARCH_MODE=third-party
 ```
 
-自动识别失败或使用自定义网关时，可以显式指定原生协议：
+If automatic detection fails or you use a custom gateway, explicitly select the native protocol:
 
 ```env
-# deepseek-claude-code、openai-chat、openrouter 或 alibaba-chat
+# deepseek-claude-code, openai-chat, openrouter, or alibaba-chat
 OTTO_NATIVE_SEARCH_PROTOCOL=openai-chat
 ```
 
-保存包含密钥的文件后，建议限制权限：
+After saving a file containing keys, restrict its permissions:
 
 ```bash
 chmod 600 ~/.config/otto/search.env
 ```
 
-配置完成后，直接提问即可：
+Then ask a question normally:
 
 ```bash
-otto "搜索 Rust 官方文档中关于异步运行时的说明"
+otto "Search the Rust documentation for information about asynchronous runtimes"
 ```
 
-OTTO 会在需要时使用搜索和网页阅读能力；网页内容仅作为资料提供，不会被当作操作指令执行。
+OTTO uses search and web-reading tools when needed. Web content is treated as reference material, not as an instruction to operate the program.
 
-## 回答模式
+## Response modes
 
-所有请求都会加载统一提示词 `system.md`。模式是可选的附加提示词，用来固定回答风格。
+Every request loads the unified `system.md` prompt. A mode is an optional additional prompt for controlling response style.
 
-设置一个默认模式：
+The built-in unified prompt and example mode templates are kept in the `prompts/` directory and copied to the config directory during installation. At runtime, OTTO reads them from `~/.config/otto/` or from the directory specified by `OTTO_MODE_DIR`.
+
+Set a default mode:
 
 ```bash
 otto --mode otto
-otto "帮我写一个简洁的提交说明"
+otto "Write a concise commit message"
 ```
 
-只使用一次模式，不改变默认设置：
+Use a mode once without changing the default:
 
 ```bash
-otto --mode jarvis "用更有角色感的方式回答"
+otto --mode jarvis "Answer in a more characterful style"
 ```
 
-清除默认模式：
+Clear the default mode:
 
 ```bash
 otto --mode
 ```
 
-安装时会提供示例模式。你也可以在配置目录中创建自己的模式文件，例如：
+The installer provides the example modes. You can create a custom mode in the config directory:
 
 ```bash
 $EDITOR ~/.config/otto/reviewer.md
 otto --mode reviewer
 ```
 
-模式文件的内容会作为额外提示词附加到 `system.md` 后面。
+The mode file is appended to `system.md` as an additional prompt.
 
-### 运行时环境变量
+### Project instructions (`AGENT.md`)
 
-Agent 每次请求默认最多执行 8 轮模型响应和工具调用。可以通过
-`OTTO_MAX_AGENT_ROUNDS` 调整，允许范围是 0–255；设置为 0 表示不限制轮数：
+For every request, OTTO searches from the workspace root to the current directory for files named exactly `AGENT.md`. They are combined from broad to narrow: the root file comes first, and the file closest to the current directory comes last. A more specific file can add project rules, but cannot override the unified system prompt, OTTO's built-in Agent runtime rules, or the user's more specific request.
+
+The workspace root defaults to the directory where OTTO starts and can be changed with `--root DIR`. Discovery never goes above the workspace root. If OTTO starts outside a workspace selected with `--root`, only the root `AGENT.md` is loaded. Project instructions apply to both Agent and `--no-agent` requests, are read for the current request only, and are never copied into the config directory.
+
+Each project instruction file must be a UTF-8 regular file. A single file is limited to 128 KiB and all files loaded for one request are limited to 256 KiB. OTTO never executes their contents or treats them as the user's question. Missing files are normal; symbolic links may only point inside the workspace.
+
+The final prompt order is: unified system prompt, `AGENT.md` project instructions, and the optional mode prompt. The user question is always sent as a separate user message.
+
+### Runtime environment variables
+
+An Agent request executes at most 8 model/tool rounds by default. Adjust this with `OTTO_MAX_AGENT_ROUNDS`, which accepts 0–255; `0` means unlimited:
 
 ```bash
 export OTTO_MAX_AGENT_ROUNDS=16
-otto "检查这个项目的实现"
+otto "Review this project's implementation"
 ```
 
-为方便管理，可以复制仓库中的 `.otto_profile.example` 为 `~/.otto_profile`，
-集中放置 Otto 的运行时环境变量，再在 `~/.profile` 或 `~/.bashrc` 中引用整个文件：
+For convenient management, copy `.otto_profile.example` to `~/.otto_profile`, then source the entire file from `~/.profile` or `~/.bashrc`:
 
 ```bash
 [ -f "$HOME/.otto_profile" ] && . "$HOME/.otto_profile"
 ```
 
-profile 文件只建议存放非敏感设置；API Key 继续使用 `otto --config` 和
-`~/.config/otto/search.env` 管理。当前支持的路径覆盖变量包括 `OTTO_CONFIG`、
-`OTTO_MODE_DIR` 和 `OTTO_SEARCH_CONFIG`。
+Keep only non-sensitive settings in the profile. Continue to manage the API key with `otto --config` and `~/.config/otto/search.env`. The supported path overrides are `OTTO_CONFIG`, `OTTO_MODE_DIR`, and `OTTO_SEARCH_CONFIG`.
 
-## 配置文件
+## Configuration files
 
-默认配置位于：
+The defaults are:
 
 ```text
-~/.config/otto/config       模型服务配置
-~/.config/otto/search.env   联网搜索配置
-~/.config/otto/system.md    统一提示词
-~/.config/otto/<mode>.md    自定义回答模式
+~/.config/otto/config       Model service configuration
+~/.config/otto/search.env   Web search configuration
+~/.config/otto/system.md    Unified system prompt
+~/.config/otto/<mode>.md    Custom response mode
 ```
 
-如果设置了 `XDG_CONFIG_HOME`，上述路径会相应改为 `$XDG_CONFIG_HOME/otto/`。
+Project-local `AGENT.md` files are not installed into the config directory; each project owns them.
 
-自动化场景也可以使用参数配置，但 API Key 会进入 shell 历史记录，日常使用推荐交互式配置：
+If `XDG_CONFIG_HOME` is set, these paths use `$XDG_CONFIG_HOME/otto/` instead.
+
+For automation, configuration can also be supplied as options. The API key will appear in shell history, so interactive configuration is recommended for daily use:
 
 ```bash
 otto --config \
@@ -279,80 +288,76 @@ otto --config \
   --model gpt-4o-mini
 ```
 
-## 管道和脚本
+## Pipes and scripts
 
-回答输出到标准输出，错误输出到标准错误，可以直接交给其他命令：
+Answers go to standard output and errors go to standard error, so OTTO can be composed with other commands:
 
 ```bash
-otto "总结当前项目的 README" | tee answer.txt
-ls -al | otto "这些文件分别是什么"
-cat error.log | otto "分析这段日志并给出排查方向"
+otto "Summarize the current project's README" | tee answer.txt
+ls -al | otto "What is each of these files?"
+cat error.log | otto "Analyze this log and suggest troubleshooting steps"
 ```
 
-命令参数会作为问题，非终端标准输入会作为附加数据读取，并以明确边界传给模型；标准输入只作为待分析内容，不会被当作额外命令执行。若脚本已经处理过输入，可使用 `--no-stdin` 关闭读取。
+Command-line arguments become the question. Non-interactive standard input is read as additional context and passed to the model with explicit boundaries; it is not treated as another command to execute. Use `--no-stdin` when a script has already processed its input.
 
-需要修改本地文件时，OTTO 会在标准错误/控制终端显示授权界面。可以用上下键选择后按 Enter 确认，也可以直接按 `1`（仅本次）、`2`（本次运行中允许该工具后续执行）或 `3`（拒绝）；授权信息不会混入标准输出。`glob`、`grep` 和 `read` 是默认允许的只读工具，不会显示此界面。
+When local files need to be changed, OTTO displays an authorization prompt on standard error or the controlling terminal. Use the arrow keys and Enter, or press `1` (this request), `2` (allow this tool for the rest of the run), or `3` (deny). Authorization details never go to standard output. `glob`, `grep`, and `read` are allowed read-only tools and do not show this prompt.
 
-## 安装、升级和卸载
+## Install, upgrade, and uninstall
 
-从源码更新后，重新执行下面的命令即可升级：
+After updating the source, run this again to upgrade:
 
 ```bash
 make install
 ```
 
-卸载 OTTO：
+Uninstall OTTO with:
 
 ```bash
 make uninstall
 ```
 
-卸载只清理安装程序创建且未被用户修改的文件；已有的模型服务配置、当前模式和用户改过的提示词会保留。
+Uninstall only removes files created by the installer when they have not been modified by the user. Existing model configuration, the active mode, and customized prompts are preserved.
 
-## 常见问题
+## Troubleshooting
 
 ### `cargo not found`
 
-Rust 已安装但当前 shell 找不到 Cargo 时，执行：
+If Rust is installed but Cargo is not available in the current shell:
 
 ```bash
 . "$HOME/.cargo/env"
 ```
 
-然后重新运行 `make`。
+Then run `make` again.
 
 ### `otto: command not found`
 
-确认 `~/.local/bin` 在当前 shell 的 `PATH` 中：
+Make sure `~/.local/bin` is in the current shell's `PATH`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### websearch 无法使用
+### Web search is unavailable
 
-先确认当前模型和网关确实支持原生联网搜索；如果不支持，确认
-`~/.config/otto/search.env` 中设置了一个第三方搜索服务和对应的 API Key 或 URL，
-并检查文件权限。也可以检查是否误设置了 `OTTO_SEARCH_MODE=third-party` 或错误的
-`OTTO_NATIVE_SEARCH_PROTOCOL`。
+First confirm that the current model and gateway support native web search. If they do not, check that `~/.config/otto/search.env` contains a third-party search provider with its API key or URL, and check the file permissions. Also check whether `OTTO_SEARCH_MODE=third-party` or an incorrect `OTTO_NATIVE_SEARCH_PROTOCOL` was set.
 
-### API 请求失败
+### API request failed
 
-检查 `otto --config` 中的服务名称、Base URL、模型名称和 API Key 是否属于同一个服务。DeepSeek 会自动使用 Anthropic Messages 接口；其他厂商优先匹配专用适配器，未匹配时使用 OpenAI Chat Completions 兼容兜底。
+Check that the service name, Base URL, model name, and API key in `otto --config` belong to the same service. DeepSeek automatically uses the Anthropic Messages API; other providers use dedicated adapters when matched and the OpenAI Chat Completions-compatible fallback otherwise.
 
-## 开发者
+## Development
 
-编译正式版本：
+Build a release binary:
 
 ```bash
 make
 ```
 
-运行完整测试：
+Run the complete test suite:
 
 ```bash
 make test
 ```
 
-项目只维护 Rust 构建链；完整测试除 Rust 工具链和 `make` 外，还需要 Python 3
-来运行本地 mock 服务和安装测试。
+The project maintains only the Rust build chain. In addition to Rust and `make`, the complete test suite requires Python 3 for the local mock services and installation tests.

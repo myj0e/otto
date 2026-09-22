@@ -53,23 +53,34 @@ fn usage_error(message: impl Into<String>) -> OttoError {
 fn take_option_value(
     arguments: &[String],
     index: &mut usize,
-    option: &str,
+    options: &[&str],
 ) -> Result<Option<String>> {
     let argument = &arguments[*index];
+    let Some(option) = options
+        .iter()
+        .copied()
+        .find(|option| argument == option || argument.starts_with(&format!("{option}=")))
+    else {
+        return Ok(None);
+    };
+
     let value = if argument == option {
         *index += 1;
         if *index >= arguments.len() {
-            return Err(usage_error(format!("选项 {option} 缺少值")));
+            return Err(usage_error(format!("选项 {} 缺少值", options.join("/"))));
         }
         arguments[*index].clone()
     } else if let Some(value) = argument.strip_prefix(&format!("{option}=")) {
         value.to_owned()
     } else {
-        return Ok(None);
+        unreachable!("option was matched above");
     };
 
     if value.is_empty() || value.starts_with("--") {
-        return Err(usage_error(format!("选项 {option} 缺少有效值")));
+        return Err(usage_error(format!(
+            "选项 {} 缺少有效值",
+            options.join("/")
+        )));
     }
 
     Ok(Some(value))
@@ -88,17 +99,17 @@ fn parse_config(arguments: &[String]) -> Result<CliOptions> {
             return Ok(options);
         }
 
-        if let Some(value) = take_option_value(arguments, &mut index, "--name")? {
+        if let Some(value) = take_option_value(arguments, &mut index, &["--name", "-n"])? {
             options.name = Some(value);
-        } else if let Some(value) = take_option_value(arguments, &mut index, "--baseurl")? {
+        } else if let Some(value) =
+            take_option_value(arguments, &mut index, &["--baseurl", "--base-url", "-b"])?
+        {
             options.baseurl = Some(value);
-        } else if let Some(value) = take_option_value(arguments, &mut index, "--base-url")? {
-            options.baseurl = Some(value);
-        } else if let Some(value) = take_option_value(arguments, &mut index, "--apikey")? {
+        } else if let Some(value) =
+            take_option_value(arguments, &mut index, &["--apikey", "--api-key", "-k"])?
+        {
             options.apikey = Some(value);
-        } else if let Some(value) = take_option_value(arguments, &mut index, "--api-key")? {
-            options.apikey = Some(value);
-        } else if let Some(value) = take_option_value(arguments, &mut index, "--model")? {
+        } else if let Some(value) = take_option_value(arguments, &mut index, &["--model", "-M"])? {
             options.model = Some(value);
         } else {
             return Err(usage_error(format!("未知配置选项：{}", arguments[index])));
@@ -114,7 +125,10 @@ fn parse_mode(arguments: &[String]) -> Result<CliOptions> {
     let mut options = CliOptions::default();
     let index;
 
-    if let Some(value) = arguments[0].strip_prefix("--mode=") {
+    if let Some(value) = arguments[0]
+        .strip_prefix("--mode=")
+        .or_else(|| arguments[0].strip_prefix("-m="))
+    {
         options.raw_mode = value.is_empty();
         if !value.is_empty() {
             options.mode = Some(value.to_owned());
@@ -126,8 +140,9 @@ fn parse_mode(arguments: &[String]) -> Result<CliOptions> {
         return Ok(options);
     } else if matches!(
         arguments[1].as_str(),
-        "--" | "--no-agent" | "--no-stdin" | "--root"
+        "--" | "--no-agent" | "-A" | "--no-stdin" | "-S" | "--root" | "-r"
     ) || arguments[1].starts_with("--root=")
+        || arguments[1].starts_with("-r=")
     {
         options.raw_mode = true;
         index = 1;
@@ -156,17 +171,17 @@ fn parse_question_tail(
                 .extend(arguments[index + 1..].iter().cloned());
             return Ok(options);
         }
-        if arguments[index] == "--no-agent" {
+        if arguments[index] == "--no-agent" || arguments[index] == "-A" {
             options.no_agent = true;
             index += 1;
             continue;
         }
-        if arguments[index] == "--no-stdin" {
+        if arguments[index] == "--no-stdin" || arguments[index] == "-S" {
             options.no_stdin = true;
             index += 1;
             continue;
         }
-        if let Some(value) = take_option_value(arguments, &mut index, "--root")? {
+        if let Some(value) = take_option_value(arguments, &mut index, &["--root", "-r"])? {
             options.root = Some(PathBuf::from(value));
             index += 1;
             continue;
@@ -201,18 +216,23 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<CliOptions> 
             command: Command::Version,
             ..CliOptions::default()
         }),
-        "--config" => parse_config(&arguments),
-        argument if argument == "--mode" || argument.starts_with("--mode=") => {
+        "--config" | "-c" => parse_config(&arguments),
+        argument
+            if argument == "--mode"
+                || argument.starts_with("--mode=")
+                || argument == "-m"
+                || argument.starts_with("-m=") =>
+        {
             parse_mode(&arguments)
         }
         "--" => Ok(CliOptions {
             prompt: arguments[1..].to_vec(),
             ..CliOptions::default()
         }),
-        "--no-agent" | "--no-stdin" | "--root" => {
+        "--no-agent" | "-A" | "--no-stdin" | "-S" | "--root" | "-r" => {
             parse_question_tail(&arguments, 0, CliOptions::default())
         }
-        argument if argument.starts_with("--root=") => {
+        argument if argument.starts_with("--root=") || argument.starts_with("-r=") => {
             parse_question_tail(&arguments, 0, CliOptions::default())
         }
         argument if argument.starts_with('-') => Err(usage_error(format!(
@@ -231,31 +251,49 @@ pub fn join_prompt(arguments: &[String]) -> Result<String> {
 }
 
 pub fn print_help() {
-    println!("OTTO (One-time.Talk once) - CLI 单轮大模型 Agent 工具");
+    println!("OTTO (One-time.Talk once) - CLI one-shot LLM Agent");
     println!();
-    println!("用法:");
-    println!("  otto <问题内容...>");
-    println!("  otto --mode <模式>");
+    println!("Usage:");
+    println!("  otto <question...>");
+    println!("  otto --mode <name>");
+    println!("  otto -m <name>");
     println!("  otto --mode");
-    println!("  otto --mode <模式> <问题内容...>");
-    println!("  otto --mode -- <问题内容...>");
-    println!("  otto --root <目录> <问题内容...>");
-    println!("  otto --no-agent <问题内容...>");
-    println!("  otto --no-stdin <问题内容...>");
+    println!("  otto --mode <name> <question...>");
+    println!("  otto --mode -- <question...>");
+    println!("  otto --root <directory> <question...>");
+    println!("  otto -r <directory> <question...>");
+    println!("  otto --no-agent <question...>");
+    println!("  otto -A <question...>");
+    println!("  otto --no-stdin <question...>");
+    println!("  otto -S <question...>");
     println!("  otto --config");
+    println!("  otto -c");
     println!("  otto --config --name ... --baseurl ... --apikey ... [--model ...]");
     println!("  otto --help");
     println!("  otto --version");
     println!();
-    println!("说明:");
-    println!("  问题参数会自动用空格拼接，通常不需要加引号。");
-    println!("  选项必须位于问题之前；第一个问题参数之后的所有参数均属于问题内容。");
-    println!("  如果问题以 - 开头，请使用 otto -- <问题内容...>。");
-    println!("  stdin 是管道时会作为附加上下文读取；--no-stdin 可关闭此行为。");
-    println!("  普通请求默认加载 system.md，并附加当前保存的模式。");
-    println!("  请求默认使用 SSE 流式输出。");
-    println!("  Agent 默认启用；--no-agent 可仅发送普通 Chat 请求。");
-    println!("  Agent 最大执行轮数可通过 OTTO_MAX_AGENT_ROUNDS 设置（默认 8，范围 0-255，0 表示不限制）。");
+    println!("Short options:");
+    println!("  -c, --config       Enter configuration");
+    println!("  -m, --mode         Set, clear, or use a response mode");
+    println!("  -n, --name         Configure the service name");
+    println!("  -b, --baseurl      Configure the service Base URL");
+    println!("  -k, --apikey       Configure the API key");
+    println!("  -M, --model        Configure the model name");
+    println!("  -r, --root         Set the workspace root");
+    println!("  -A, --no-agent     Disable Agent tool calls");
+    println!("  -S, --no-stdin     Ignore standard input");
+    println!("  -h, --help         Show help");
+    println!("  -V, --version      Show the version");
+    println!();
+    println!("Notes:");
+    println!("  Question arguments are joined with spaces; quoting is usually optional.");
+    println!("  Options must come before the question; every argument after the first question argument is question content.");
+    println!("  If the question starts with -, use otto -- <question...>.");
+    println!("  Piped stdin is read as additional context; use --no-stdin to disable it.");
+    println!("  Normal requests load system.md and the currently selected mode.");
+    println!("  Responses use SSE streaming by default.");
+    println!("  Agent is enabled by default; --no-agent sends an ordinary Chat request only.");
+    println!("  Set OTTO_MAX_AGENT_ROUNDS to control the Agent limit (default 8, range 0-255, 0 means unlimited).");
 }
 
 #[cfg(test)]
@@ -278,6 +316,18 @@ mod tests {
         assert_eq!(options.command, Command::Mode);
         assert_eq!(options.mode.as_deref(), Some("otto"));
         assert!(!options.raw_mode);
+    }
+
+    #[test]
+    fn parses_short_mode_option() {
+        let options = parse(arguments(&["-m", "otto"])).expect("options");
+        assert_eq!(options.command, Command::Mode);
+        assert_eq!(options.mode.as_deref(), Some("otto"));
+        assert!(!options.raw_mode);
+
+        let options = parse(arguments(&["-m=jarvis", "你好"])).expect("options");
+        assert_eq!(options.mode.as_deref(), Some("jarvis"));
+        assert_eq!(options.prompt, arguments(&["你好"]));
     }
 
     #[test]
@@ -307,6 +357,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_short_config_options() {
+        let options = parse(arguments(&[
+            "-c",
+            "-n",
+            "SiliconFlow",
+            "-b=https://example.test/v1",
+            "-k",
+            "secret",
+            "-M",
+            "test-model",
+        ]))
+        .expect("options");
+        assert_eq!(options.command, Command::Config);
+        assert_eq!(options.name.as_deref(), Some("SiliconFlow"));
+        assert_eq!(options.baseurl.as_deref(), Some("https://example.test/v1"));
+        assert_eq!(options.apikey.as_deref(), Some("secret"));
+        assert_eq!(options.model.as_deref(), Some("test-model"));
+    }
+
+    #[test]
     fn parses_workspace_and_agent_flags() {
         let options = parse(arguments(&[
             "--root",
@@ -319,6 +389,13 @@ mod tests {
         assert_eq!(options.root, Some(std::path::PathBuf::from("workspace")));
         assert!(options.no_agent);
         assert_eq!(options.prompt, arguments(&["你好", "世界"]));
+
+        let options =
+            parse(arguments(&["-r", "workspace", "-A", "-S", "你好"])).expect("short options");
+        assert_eq!(options.root, Some(std::path::PathBuf::from("workspace")));
+        assert!(options.no_agent);
+        assert!(options.no_stdin);
+        assert_eq!(options.prompt, arguments(&["你好"]));
     }
 
     #[test]
@@ -355,7 +432,7 @@ mod tests {
 
     #[test]
     fn still_rejects_a_dash_prefixed_argument_before_the_question() {
-        assert!(parse(arguments(&["-m", "这个参数是什么意思"])).is_err());
+        assert!(parse(arguments(&["-x", "这个参数是什么意思"])).is_err());
     }
 
     #[test]

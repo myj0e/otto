@@ -146,6 +146,9 @@ def main():
         with tempfile.TemporaryDirectory(prefix="otto-agent-test-") as directory:
             workspace = pathlib.Path(directory)
             (workspace / "note.txt").write_text("agent secret\n", encoding="utf-8")
+            (workspace / "AGENT.md").write_text(
+                "workspace instruction\n", encoding="utf-8"
+            )
             prompt_dir = workspace / "prompts"
             prompt_dir.mkdir()
             (prompt_dir / "system.md").write_text("agent test system\n", encoding="utf-8")
@@ -238,6 +241,13 @@ def main():
             first, second = requests
             if not first.get("tools") or first.get("tool_choice") != "auto":
                 raise AssertionError("first request did not advertise Agent tools")
+            system_message = next(
+                message
+                for message in first["messages"]
+                if message.get("role") == "system"
+            )
+            if "workspace instruction" not in system_message.get("content", ""):
+                raise AssertionError("AGENT.md instructions were not sent to the model")
             assistant = next(
                 message
                 for message in second["messages"]

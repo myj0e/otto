@@ -109,8 +109,33 @@ pub fn set_active(mode: Option<&str>) -> Result<()> {
 }
 
 pub fn combine(base: &str, mode: Option<&str>) -> String {
-    match mode {
-        Some(mode) => format!("{base}\n\n{mode}"),
-        None => base.to_owned(),
+    combine_layers(base, None, mode)
+}
+
+pub fn combine_layers(base: &str, project: Option<&str>, mode: Option<&str>) -> String {
+    let mut combined = base.to_owned();
+    for layer in [project, mode].into_iter().flatten() {
+        combined.push_str("\n\n");
+        combined.push_str(layer);
+    }
+    combined
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{combine, combine_layers};
+
+    #[test]
+    fn combines_prompt_layers_in_runtime_order() {
+        assert_eq!(
+            combine_layers("system", Some("project"), Some("mode")),
+            "system\n\nproject\n\nmode"
+        );
+    }
+
+    #[test]
+    fn legacy_combine_keeps_mode_only_behavior() {
+        assert_eq!(combine("system", Some("mode")), "system\n\nmode");
+        assert_eq!(combine("system", None), "system");
     }
 }

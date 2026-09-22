@@ -5,6 +5,7 @@ mod config;
 mod error;
 mod http;
 mod input;
+mod instructions;
 mod permission;
 mod prompt;
 mod tools;
@@ -62,6 +63,10 @@ fn handle_config(options: &CliOptions) -> Result<()> {
 fn load_prompts(options: &CliOptions) -> Result<(String, Option<String>)> {
     let base_prompt = prompt::load("system")?
         .ok_or_else(|| OttoError::Config("缺少统一系统提示词文件 system.md".to_owned()))?;
+    let workspace = workspace::Workspace::new(options.root.as_deref())?;
+    let current_dir = std::env::current_dir()?;
+    let project_instructions = instructions::discover(&workspace, &current_dir)?;
+    let project_prompt = project_instructions.render();
     let (mode_name, mode_prompt) = if options.raw_mode {
         (None, None)
     } else if let Some(mode) = options.mode.as_deref() {
@@ -86,7 +91,11 @@ fn load_prompts(options: &CliOptions) -> Result<(String, Option<String>)> {
         }
     };
     Ok((
-        prompt::combine(&base_prompt, mode_prompt.as_deref()),
+        prompt::combine_layers(
+            &base_prompt,
+            project_prompt.as_deref(),
+            mode_prompt.as_deref(),
+        ),
         mode_name,
     ))
 }

@@ -3,6 +3,11 @@ set -eu
 
 binary=${1:-./target/release/otto}
 test_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+prompt_source_dir="$test_root/prompts"
+if [ -z "${OTTO_MODE_DIR-}" ]; then
+    OTTO_MODE_DIR="$prompt_source_dir"
+    export OTTO_MODE_DIR
+fi
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/otto-test.XXXXXX")
 server_pid=""
 
@@ -17,6 +22,7 @@ trap cleanup EXIT INT TERM
 
 help_output=$($binary --help)
 printf '%s\n' "$help_output" | rg -q -- 'OTTO \(One-time.Talk once\)'
+printf '%s\n' "$help_output" | rg -q '^Usage:$'
 printf '%s\n' "$help_output" | rg -q -- --config
 if "$binary" -mode otto >/dev/null 2>&1; then
     echo "single-dash -mode should not be accepted" >&2
@@ -73,7 +79,8 @@ test "$answer" = 'mock: 你好 世界'
 rg -q '你好 世界' "$capture_file"
 rg -q 'test-model' "$capture_file"
 rg -q '"stream":true' "$capture_file"
-rg -q '所有请求都会加载' "$capture_file"
+rg -q 'Every request loads' "$capture_file"
+rg -q 'The language of every response must match' "$capture_file"
 
 pipe_answer=$(printf 'alpha.txt\nbeta.txt\n' | env \
     HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
@@ -98,8 +105,8 @@ fi
 
 mode_directory="$temporary_directory/modes"
 mkdir -p "$mode_directory"
-cp "$test_root/system.md" "$mode_directory/system.md"
-cp "$test_root/otto.md" "$mode_directory/otto.md"
+cp "$prompt_source_dir/system.md" "$mode_directory/system.md"
+cp "$prompt_source_dir/otto.md" "$mode_directory/otto.md"
 printf '%s\n' 'test-mode-system-prompt' >"$mode_directory/test.md"
 
 otto_mode_answer=$(env \
@@ -117,7 +124,7 @@ otto_answer=$(env \
     OTTO_CONFIG="$config_file" OTTO_MODE_DIR="$mode_directory" \
     "$binary" 你好 世界)
 test "$otto_answer" = 'mock: 你好 世界'
-rg -q '所有请求都会加载' "$capture_file"
+rg -q 'Every request loads' "$capture_file"
 rg -q '嘴臭' "$capture_file"
 
 test_mode_answer=$(env \
@@ -135,7 +142,7 @@ mode_answer=$(env \
     OTTO_CONFIG="$config_file" OTTO_MODE_DIR="$mode_directory" \
     "$binary" 你好 世界)
 test "$mode_answer" = 'mock: 你好 世界'
-rg -q '所有请求都会加载' "$capture_file"
+rg -q 'Every request loads' "$capture_file"
 rg -q 'test-mode-system-prompt' "$capture_file"
 
 raw_answer=$(env \
@@ -149,7 +156,7 @@ if rg -q 'test-mode-system-prompt' "$capture_file"; then
     echo "one-shot mode without an optional mode should omit the mode prompt" >&2
     exit 1
 fi
-rg -q '所有请求都会加载' "$capture_file"
+rg -q 'Every request loads' "$capture_file"
 
 clear_mode_answer=$(env \
     OTTO_CONFIG="$config_file" "$binary" --mode)
@@ -163,7 +170,7 @@ bare_answer=$(env \
     OTTO_CONFIG="$config_file" OTTO_MODE_DIR="$mode_directory" \
     "$binary" 你好 世界)
 test "$bare_answer" = 'mock: 你好 世界'
-rg -q '所有请求都会加载' "$capture_file"
+rg -q 'Every request loads' "$capture_file"
 if rg -q 'test-mode-system-prompt' "$capture_file"; then
     echo "cleared mode should omit the optional mode prompt" >&2
     exit 1

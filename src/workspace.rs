@@ -31,6 +31,10 @@ impl Workspace {
         Ok(Self { root })
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn relative(&self, path: &Path) -> Result<PathBuf> {
         path.strip_prefix(&self.root)
             .map(Path::to_path_buf)

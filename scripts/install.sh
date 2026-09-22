@@ -217,6 +217,7 @@ if [ -z "$binary_source" ]; then
 else
     binary_source=$(absolute_path "$binary_source")
 fi
+prompt_source_dir="$project_root/prompts"
 
 [ -n "$prefix" ] || die '安装前缀不能为空'
 [ -n "$config_dir" ] || die '配置目录不能为空'
@@ -253,8 +254,8 @@ fi
 [ ! -L "$binary_source" ] || die "可执行文件是符号链接：$binary_source"
 
 for prompt_name in system otto jarvis; do
-    [ -f "$project_root/$prompt_name.md" ] ||
-        die "找不到提示词文件：$project_root/$prompt_name.md"
+    [ -f "$prompt_source_dir/$prompt_name.md" ] ||
+        die "找不到提示词文件：$prompt_source_dir/$prompt_name.md"
 done
 
 if [ -L "$state_dir" ]; then
@@ -339,7 +340,7 @@ jarvis_managed=0
 jarvis_checksum=''
 
 for prompt_name in system otto jarvis; do
-    source_prompt="$project_root/$prompt_name.md"
+    source_prompt="$prompt_source_dir/$prompt_name.md"
     destination_prompt="$config_dir/$prompt_name.md"
     managed=0
     expected_checksum=''
