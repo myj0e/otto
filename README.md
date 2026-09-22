@@ -80,6 +80,13 @@ https://api.deepseek.com
 
 The DeepSeek adapter maps the root URL to `https://api.deepseek.com/anthropic/v1/messages` and uses the same interface for native web search. You can also set the Base URL to `https://api.deepseek.com/anthropic`.
 
+If the current network requires a proxy, OTTO follows the system proxy settings
+by default and has no separate proxy switch. On Linux GNOME, `none` means direct
+connections and `manual` uses the system HTTP/HTTPS/SOCKS proxy and bypass list.
+When no desktop proxy setting can be read, OTTO falls back to the standard
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables.
+HTTP(S), `socks4`, `socks5`, and `socks5h` proxies are supported.
+
 ### 4. Start using OTTO
 
 ```bash

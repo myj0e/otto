@@ -2,6 +2,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+use std::process::Command;
+
 use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::Value;
@@ -9,6 +12,198 @@ use serde_json::Value;
 use crate::error::{OttoError, Result};
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemProxySettings {
+    http: Option<String>,
+    https: Option<String>,
+    socks: Option<String>,
+    no_proxy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SystemProxyState {
+    Disabled,
+    Manual(SystemProxySettings),
+}
+
+/// Build a client with the operating system's proxy behavior.
+///
+/// Reqwest follows proxy environment variables by default. On Linux, desktop
+/// proxy switches are commonly stored in GNOME's gsettings instead of being
+/// exported to the environment, so honor that setting when it is available.
+/// If no desktop setting can be read, leave reqwest's default behavior intact.
+pub fn client_builder() -> Result<reqwest::ClientBuilder> {
+    let builder = reqwest::Client::builder();
+    match system_proxy_state() {
+        Some(SystemProxyState::Disabled) => Ok(builder.no_proxy()),
+        Some(SystemProxyState::Manual(settings)) => configure_manual_proxy(builder, settings),
+        None => Ok(builder),
+    }
+}
+
+fn configure_manual_proxy(
+    mut builder: reqwest::ClientBuilder,
+    settings: SystemProxySettings,
+) -> Result<reqwest::ClientBuilder> {
+    // An explicit desktop setting is authoritative. This prevents a stale
+    // HTTP_PROXY/ALL_PROXY value from defeating the system proxy switch.
+    builder = builder.no_proxy();
+    let no_proxy = settings
+        .no_proxy
+        .as_deref()
+        .and_then(reqwest::NoProxy::from_string);
+
+    if let Some(endpoint) = settings.http {
+        let proxy = reqwest::Proxy::http(endpoint)
+            .map_err(|error| OttoError::Network(format!("系统 HTTP 代理无效：{error}")))?
+            .no_proxy(no_proxy.clone());
+        builder = builder.proxy(proxy);
+    }
+    if let Some(endpoint) = settings.https {
+        let proxy = reqwest::Proxy::https(endpoint)
+            .map_err(|error| OttoError::Network(format!("系统 HTTPS 代理无效：{error}")))?
+            .no_proxy(no_proxy.clone());
+        builder = builder.proxy(proxy);
+    }
+    if let Some(endpoint) = settings.socks {
+        let proxy = reqwest::Proxy::all(endpoint)
+            .map_err(|error| OttoError::Network(format!("系统 SOCKS 代理无效：{error}")))?
+            .no_proxy(no_proxy);
+        builder = builder.proxy(proxy);
+    }
+    Ok(builder)
+}
+
+fn system_proxy_state() -> Option<SystemProxyState> {
+    #[cfg(target_os = "linux")]
+    {
+        return gnome_system_proxy_state();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn gnome_system_proxy_state() -> Option<SystemProxyState> {
+    let mode = gsettings_value("org.gnome.system.proxy", "mode")?;
+    match parse_gsettings_scalar(&mode).as_str() {
+        "none" => Some(SystemProxyState::Disabled),
+        "manual" => {
+            let http = gsettings_endpoint("http", "org.gnome.system.proxy.http");
+            let use_same_proxy = gsettings_value("org.gnome.system.proxy", "use-same-proxy")
+                .is_some_and(|value| parse_gsettings_scalar(&value) == "true");
+            let https = if use_same_proxy {
+                http.clone()
+            } else {
+                gsettings_endpoint("http", "org.gnome.system.proxy.https")
+            };
+            let socks = gsettings_endpoint("socks5h", "org.gnome.system.proxy.socks");
+            let no_proxy = gsettings_value("org.gnome.system.proxy", "ignore-hosts")
+                .and_then(|value| normalize_no_proxy(&value));
+            Some(SystemProxyState::Manual(SystemProxySettings {
+                http,
+                https,
+                socks,
+                no_proxy,
+            }))
+        }
+        // Reqwest has no PAC resolver. Keep its normal environment behavior
+        // for automatic proxy mode instead of guessing at a proxy endpoint.
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_value(schema: &str, key: &str) -> Option<String> {
+    let output = Command::new("gsettings")
+        .args(["get", schema, key])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?;
+    Some(value.trim().to_owned())
+}
+
+fn parse_gsettings_scalar(value: &str) -> String {
+    let value = value.trim().strip_prefix("uint32 ").unwrap_or(value.trim());
+    if value.len() >= 2
+        && ((value.starts_with('\'') && value.ends_with('\''))
+            || (value.starts_with('"') && value.ends_with('"')))
+    {
+        value[1..value.len() - 1].to_owned()
+    } else {
+        value.to_owned()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_endpoint(scheme: &str, schema: &str) -> Option<String> {
+    let host = parse_gsettings_scalar(&gsettings_value(schema, "host")?);
+    if host.is_empty() {
+        return None;
+    }
+    let port = parse_gsettings_scalar(&gsettings_value(schema, "port")?)
+        .parse::<u16>()
+        .ok()?;
+    if port == 0 {
+        return None;
+    }
+    let host = if host.parse::<std::net::IpAddr>().is_ok() && host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    Some(format!("{scheme}://{host}:{port}"))
+}
+
+fn normalize_no_proxy(value: &str) -> Option<String> {
+    let value = value.trim().strip_prefix("@as ").unwrap_or(value.trim());
+    let value = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(value);
+    let entries = value
+        .split(',')
+        .filter_map(|entry| {
+            let entry = parse_gsettings_scalar(entry.trim());
+            normalize_no_proxy_entry(&entry)
+        })
+        .collect::<Vec<_>>();
+    (!entries.is_empty()).then(|| entries.join(","))
+}
+
+fn normalize_no_proxy_entry(entry: &str) -> Option<String> {
+    if entry.is_empty() {
+        return None;
+    }
+    if entry == "*" {
+        return Some(entry.to_owned());
+    }
+    if let Some(prefix) = entry.strip_suffix(".*") {
+        let parts = prefix.split('.').collect::<Vec<_>>();
+        if !parts.is_empty()
+            && parts.len() <= 3
+            && parts.iter().all(|part| part.parse::<u8>().is_ok())
+        {
+            let address = format!(
+                "{}.{}",
+                prefix,
+                (0..(4 - parts.len()))
+                    .map(|_| "0")
+                    .collect::<Vec<_>>()
+                    .join(".")
+            );
+            return Some(format!("{address}/{}", parts.len() * 8));
+        }
+    }
+    Some(entry.strip_prefix('*').unwrap_or(entry).to_owned())
+}
 
 #[derive(Debug)]
 pub enum ChatEvent {
@@ -106,7 +301,7 @@ pub async fn chat_stream_events<F>(request: ChatRequest<'_>, mut on_event: F) ->
 where
     F: FnMut(ChatEvent) -> Result<()>,
 {
-    let client = reqwest::Client::builder()
+    let client = client_builder()?
         .connect_timeout(request.connect_timeout)
         .timeout(request.timeout)
         .redirect(reqwest::redirect::Policy::none())
@@ -214,7 +409,23 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{event_content, process_line, ChatEvent};
+    use super::{
+        event_content, normalize_no_proxy, parse_gsettings_scalar, process_line, ChatEvent,
+    };
+
+    #[test]
+    fn parses_gsettings_values() {
+        assert_eq!(parse_gsettings_scalar("'manual'"), "manual");
+        assert_eq!(parse_gsettings_scalar("uint32 7892"), "7892");
+    }
+
+    #[test]
+    fn normalizes_gnome_no_proxy_patterns() {
+        assert_eq!(
+            normalize_no_proxy("['localhost', '127.*', '*.example.com']"),
+            Some("localhost,127.0.0.0/8,.example.com".to_owned())
+        );
+    }
 
     #[test]
     fn parses_multiline_sse_data() {

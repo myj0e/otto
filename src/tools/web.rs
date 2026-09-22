@@ -14,6 +14,7 @@ use super::{
 };
 use crate::config::SearchConfig;
 use crate::error::{OttoError, Result};
+use crate::http;
 
 const MAX_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_FETCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -186,7 +187,7 @@ async fn response_body(response: reqwest::Response, maximum: usize) -> Result<Ve
 }
 
 fn search_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+    http::client_builder()?
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
@@ -562,7 +563,7 @@ async fn fetch_once(url: &Url) -> Result<(reqwest::Response, IpAddr)> {
         .host_str()
         .ok_or_else(|| OttoError::Tool("URL 缺少主机名".to_owned()))?;
     let port = url.port_or_known_default().unwrap_or(443);
-    let client = reqwest::Client::builder()
+    let client = http::client_builder()?
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())

@@ -81,6 +81,12 @@ https://api.deepseek.com
 
 DeepSeek 适配器会将根地址映射到 `https://api.deepseek.com/anthropic/v1/messages`，并使用同一接口执行原生 Web Search。也可以把 Base URL 写成 `https://api.deepseek.com/anthropic`。
 
+如果当前网络需要代理，OTTO 默认跟随系统代理设置，不提供独立的代理开关。Linux
+GNOME 下，系统代理为 `none` 时直连，为 `manual` 时使用系统配置的 HTTP/HTTPS/SOCKS
+代理和绕过列表；没有可读取的桌面代理设置时，才遵循标准的 `HTTP_PROXY`、
+`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY` 环境变量。HTTP(S) 以及 `socks4`、`socks5`、
+`socks5h` 代理均可使用。
+
 ### 4. 开始使用
 
 ```bash
