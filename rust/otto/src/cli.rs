@@ -174,8 +174,13 @@ fn parse_question_tail(
         if arguments[index].starts_with('-') {
             return Err(usage_error(format!("未知选项：{}", arguments[index])));
         }
-        options.prompt.push(arguments[index].clone());
-        index += 1;
+
+        // Once the first positional argument is the question, every remaining
+        // argument belongs to that question. In particular, strings such as
+        // `-m` or `--no-agent` may be part of the question and must not be
+        // parsed as Otto options.
+        options.prompt.extend(arguments[index..].iter().cloned());
+        return Ok(options);
     }
     Ok(options)
 }
@@ -244,6 +249,8 @@ pub fn print_help() {
     println!();
     println!("说明:");
     println!("  问题参数会自动用空格拼接，通常不需要加引号。");
+    println!("  选项必须位于问题之前；第一个问题参数之后的所有参数均属于问题内容。");
+    println!("  如果问题以 - 开头，请使用 otto -- <问题内容...>。");
     println!("  stdin 是管道时会作为附加上下文读取；--no-stdin 可关闭此行为。");
     println!("  普通请求默认加载 system.md，并附加当前保存的模式。");
     println!("  请求默认使用 SSE 流式输出。");
@@ -312,6 +319,43 @@ mod tests {
         assert_eq!(options.root, Some(std::path::PathBuf::from("workspace")));
         assert!(options.no_agent);
         assert_eq!(options.prompt, arguments(&["你好", "世界"]));
+    }
+
+    #[test]
+    fn treats_all_arguments_after_the_first_question_argument_as_prompt() {
+        let options = parse(arguments(&["python", "-m", "这个指令是什么意思"])).expect("options");
+        assert_eq!(
+            options.prompt,
+            arguments(&["python", "-m", "这个指令是什么意思"])
+        );
+    }
+
+    #[test]
+    fn does_not_parse_options_after_the_question_starts() {
+        let options = parse(arguments(&[
+            "解释这段命令",
+            "--no-agent",
+            "--root",
+            "workspace",
+        ]))
+        .expect("options");
+        assert!(!options.no_agent);
+        assert_eq!(options.root, None);
+        assert_eq!(
+            options.prompt,
+            arguments(&["解释这段命令", "--no-agent", "--root", "workspace"])
+        );
+    }
+
+    #[test]
+    fn accepts_a_dash_prefixed_question_after_the_separator() {
+        let options = parse(arguments(&["--", "-m", "这个参数是什么意思"])).expect("options");
+        assert_eq!(options.prompt, arguments(&["-m", "这个参数是什么意思"]));
+    }
+
+    #[test]
+    fn still_rejects_a_dash_prefixed_argument_before_the_question() {
+        assert!(parse(arguments(&["-m", "这个参数是什么意思"])).is_err());
     }
 
     #[test]
