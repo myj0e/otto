@@ -185,7 +185,7 @@ impl Tool for GlobTool {
             self.name(),
             "在 workspace 内按 Glob 模式查找文件。只返回相对路径，不读取文件内容。",
             json!({
-                "pattern": {"type": "string", "description": "例如 **/*.rs 或 src/*.c"},
+                "pattern": {"type": "string", "description": "例如 **/*.rs 或 src/*.rs"},
                 "path": {"type": "string", "description": "可选的 workspace 内相对目录"},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 1000}
             }),

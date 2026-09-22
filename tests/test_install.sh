@@ -53,7 +53,7 @@ test "$(cat "$config_dir/active_mode")" = 'otto'
 test -f "$state_dir/install.manifest" || fail '安装状态未记录'
 rg -q '^version=2$' "$state_dir/install.manifest" || fail '安装状态不是 v2'
 
-# A v1 manifest from the C-era installer must be accepted and upgraded in
+# A v1 manifest from an older installer must be accepted and upgraded in
 # place. The paths and ownership records use the same fields.
 sed -i 's/^version=2$/version=1/' "$state_dir/install.manifest"
 OTTO_INSTALL_BINARY="$binary_path" "$install_script" \

@@ -354,8 +354,5 @@ make
 make test
 ```
 
-完整测试还需要 C 编译器、`pkg-config` 和 libcurl 开发库。Ubuntu/Debian 可以执行：
-
-```bash
-sudo apt install build-essential pkg-config libcurl4-openssl-dev
-```
+项目只维护 Rust 构建链；完整测试除 Rust 工具链和 `make` 外，还需要 Python 3
+来运行本地 mock 服务和安装测试。
