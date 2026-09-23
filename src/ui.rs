@@ -15,6 +15,17 @@ const BASH_STEP_MAX_CHARS: usize = 400;
 const MENU_MAX_VISIBLE_OPTIONS: usize = 8;
 const NOTE_MAX_CHARS: usize = 4_000;
 
+// Keep structural colors in one restrained ANSI palette so panels read as
+// distinct sections without overpowering their contents.
+const COLOR_BRAND: Color = Color::AnsiValue(109); // muted teal
+const COLOR_EXECUTION: Color = Color::AnsiValue(139); // dusty purple
+const COLOR_TOOL_ACTIVITY: Color = Color::AnsiValue(103); // slate blue
+const COLOR_FINAL_ANSWER: Color = Color::AnsiValue(108); // sage green
+const COLOR_AUTHORIZATION: Color = Color::AnsiValue(144); // soft ochre
+const COLOR_ERROR: Color = Color::AnsiValue(138); // muted rose
+const COLOR_MUTED: Color = Color::DarkGrey;
+const COLOR_BODY: Color = Color::Grey;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationChoice {
     Once,
@@ -96,9 +107,16 @@ pub fn print_tool_summary(names: &[String]) {
     let width = terminal_width(interactive);
     let title = format!("工具活动 · {} 项", names.len());
     let styled = interactive && colors_enabled();
-    let _ = write_panel_title(&mut writer, &title, width, false, styled);
+    let _ = write_panel_title(
+        &mut writer,
+        &title,
+        width,
+        false,
+        COLOR_TOOL_ACTIVITY,
+        styled,
+    );
     let _ = write_muted_line(&mut writer, &summary, width, styled);
-    let _ = write_panel_footer(&mut writer, width, styled);
+    let _ = write_panel_footer(&mut writer, width, COLOR_TOOL_ACTIVITY, styled);
     let _ = writer.flush();
 }
 
@@ -116,9 +134,16 @@ pub fn print_execution_note(note: &str) {
     let width = terminal_width(interactive);
     if interactive {
         let styled = colors_enabled();
-        let _ = write_panel_title(&mut writer, "执行说明", width, true, styled);
+        let _ = write_panel_title(
+            &mut writer,
+            "执行说明",
+            width,
+            true,
+            COLOR_EXECUTION,
+            styled,
+        );
         let _ = write_muted_line(&mut writer, &note, width, styled);
-        let _ = write_panel_footer(&mut writer, width, styled);
+        let _ = write_panel_footer(&mut writer, width, COLOR_EXECUTION, styled);
     } else {
         let _ = writeln!(writer, "[otto] 执行说明：{note}");
     }
@@ -136,6 +161,7 @@ pub fn begin_final_answer() -> io::Result<bool> {
             "OTTO · 最终答复",
             terminal_width(true),
             false,
+            COLOR_FINAL_ANSWER,
             colors_enabled(),
         )?;
         writer.flush()?;
@@ -150,7 +176,12 @@ pub fn end_final_answer(interactive: bool) -> io::Result<()> {
     }
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    write_panel_footer(&mut writer, terminal_width(true), colors_enabled())?;
+    write_panel_footer(
+        &mut writer,
+        terminal_width(true),
+        COLOR_FINAL_ANSWER,
+        colors_enabled(),
+    )?;
     writer.flush()
 }
 
@@ -162,12 +193,19 @@ pub fn print_final_answer(answer: &str) -> io::Result<()> {
     if interactive {
         let width = terminal_width(true);
         let styled = colors_enabled();
-        write_panel_title(&mut writer, "OTTO · 最终答复", width, false, styled)?;
+        write_panel_title(
+            &mut writer,
+            "OTTO · 最终答复",
+            width,
+            false,
+            COLOR_FINAL_ANSWER,
+            styled,
+        )?;
         writer.write_all(sanitize_multiline(answer).as_bytes())?;
         if !answer.ends_with('\n') {
             writer.write_all(b"\n")?;
         }
-        write_panel_footer(&mut writer, width, styled)?;
+        write_panel_footer(&mut writer, width, COLOR_FINAL_ANSWER, styled)?;
     } else {
         writer.write_all(answer.as_bytes())?;
         if !answer.ends_with('\n') {
@@ -185,7 +223,7 @@ pub fn print_status(message: &str) {
     if interactive && colors_enabled() {
         let _ = queue!(
             writer,
-            SetForegroundColor(Color::DarkCyan),
+            SetForegroundColor(COLOR_BRAND),
             crossterm::style::Print("◆ "),
             ResetColor,
             crossterm::style::Print(message),
@@ -203,7 +241,7 @@ pub fn print_screen_header(title: &str, subtitle: &str) {
     let mut writer = stdout.lock();
     let width = terminal_width(interactive);
     let styled = interactive && colors_enabled();
-    let _ = write_panel_title(&mut writer, title, width, false, styled);
+    let _ = write_panel_title(&mut writer, title, width, false, COLOR_BRAND, styled);
     if !subtitle.trim().is_empty() {
         let _ = write_muted_line(&mut writer, subtitle, width, styled);
     }
@@ -216,11 +254,11 @@ pub fn print_summary(title: &str, fields: &[(&str, &str)]) {
     let mut writer = stdout.lock();
     let width = terminal_width(interactive);
     let styled = interactive && colors_enabled();
-    let _ = write_panel_title(&mut writer, title, width, true, styled);
+    let _ = write_panel_title(&mut writer, title, width, true, COLOR_BRAND, styled);
     for (label, value) in fields {
-        let _ = write_panel_field(&mut writer, label, value, Color::Grey, width, styled);
+        let _ = write_panel_field(&mut writer, label, value, COLOR_BODY, width, styled);
     }
-    let _ = write_panel_footer(&mut writer, width, styled);
+    let _ = write_panel_footer(&mut writer, width, COLOR_BRAND, styled);
     let _ = writer.flush();
 }
 
@@ -231,14 +269,14 @@ pub fn write_input_prompt(label: &str, default: Option<&str>) -> io::Result<()> 
     if interactive && colors_enabled() {
         queue!(
             writer,
-            SetForegroundColor(Color::DarkCyan),
+            SetForegroundColor(COLOR_BRAND),
             crossterm::style::Print(format!("  {label}")),
             ResetColor
         )?;
         if let Some(default) = default.filter(|value| !value.is_empty()) {
             queue!(
                 writer,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(COLOR_MUTED),
                 crossterm::style::Print(format!(" [{default}]")),
                 ResetColor
             )?;
@@ -264,7 +302,7 @@ pub fn print_error(message: &str) {
     if interactive && colors_enabled() {
         let _ = queue!(
             writer,
-            SetForegroundColor(Color::DarkYellow),
+            SetForegroundColor(COLOR_ERROR),
             crossterm::style::Print("! "),
             ResetColor,
             crossterm::style::Print("otto: "),
@@ -292,7 +330,7 @@ impl ModelProgress {
         if colors_enabled() {
             let _ = queue!(
                 writer,
-                SetForegroundColor(Color::DarkCyan),
+                SetForegroundColor(COLOR_BRAND),
                 crossterm::style::Print("◌ "),
                 ResetColor,
                 crossterm::style::Print("OTTO · "),
@@ -339,8 +377,15 @@ pub fn select_authorization(
     } else {
         format!("授权 · {tool_name}")
     };
-    write_panel_title(&mut session.writer, &title, width, true, styled)
-        .map_err(permission_io_error)?;
+    write_panel_title(
+        &mut session.writer,
+        &title,
+        width,
+        true,
+        COLOR_AUTHORIZATION,
+        styled,
+    )
+    .map_err(permission_io_error)?;
     if let Some(mode) = mode.filter(|mode| !mode.trim().is_empty()) {
         write_muted_line(
             &mut session.writer,
@@ -355,9 +400,9 @@ pub fn select_authorization(
         "操作",
         &action,
         if capability_label == "写入" {
-            Color::DarkYellow
+            COLOR_AUTHORIZATION
         } else {
-            Color::Grey
+            COLOR_BODY
         },
         width,
         styled,
@@ -369,8 +414,10 @@ pub fn select_authorization(
         0,
         2,
         "授权选择",
+        COLOR_AUTHORIZATION,
     )?;
-    write_panel_footer(&mut session.writer, width, styled).map_err(permission_io_error)?;
+    write_panel_footer(&mut session.writer, width, COLOR_AUTHORIZATION, styled)
+        .map_err(permission_io_error)?;
     Ok(choice_for(selected))
 }
 
@@ -389,8 +436,15 @@ pub fn select_bash_authorization(
     let (terminal_width, _) = terminal::size().map_err(permission_io_error)?;
     let line_width = usize::from(terminal_width.saturating_sub(1).max(1));
     let styled = colors_enabled();
-    write_panel_title(&mut session.writer, "授权 · bash", line_width, true, styled)
-        .map_err(permission_io_error)?;
+    write_panel_title(
+        &mut session.writer,
+        "授权 · bash",
+        line_width,
+        true,
+        COLOR_AUTHORIZATION,
+        styled,
+    )
+    .map_err(permission_io_error)?;
     write_muted_line(
         &mut session.writer,
         "尚未执行 · 模型判断仅供参考",
@@ -411,15 +465,15 @@ pub fn select_bash_authorization(
         &mut session.writer,
         "目录",
         &sanitize_inline(working_directory, 4096),
-        Color::Grey,
+        COLOR_BODY,
         line_width,
         styled,
     )
     .map_err(permission_io_error)?;
     let risk_color = if risk_is_yellow {
-        Color::DarkYellow
+        COLOR_AUTHORIZATION
     } else {
-        Color::DarkCyan
+        COLOR_BRAND
     };
     write_panel_field(
         &mut session.writer,
@@ -434,7 +488,7 @@ pub fn select_bash_authorization(
         &mut session.writer,
         "说明",
         &sanitize_inline(reason, BASH_REASON_MAX_CHARS),
-        Color::Grey,
+        COLOR_BODY,
         line_width,
         styled,
     )
@@ -449,15 +503,21 @@ pub fn select_bash_authorization(
                 .map(|step| sanitize_inline(step, BASH_STEP_MAX_CHARS))
                 .collect::<Vec<_>>()
                 .join(" · "),
-            Color::Grey,
+            COLOR_BODY,
             line_width,
             styled,
         )
         .map_err(permission_io_error)?;
     }
 
-    write_section_label(&mut session.writer, "脚本 · 批准后运行", line_width, styled)
-        .map_err(permission_io_error)?;
+    write_section_label(
+        &mut session.writer,
+        "脚本 · 批准后运行",
+        line_width,
+        COLOR_BRAND,
+        styled,
+    )
+    .map_err(permission_io_error)?;
     write_muted_line(
         &mut session.writer,
         "判断是模型摘要；批准覆盖整段脚本。",
@@ -479,8 +539,10 @@ pub fn select_bash_authorization(
         1,
         1,
         "授权选择",
+        COLOR_AUTHORIZATION,
     )?;
-    write_panel_footer(&mut session.writer, line_width, styled).map_err(permission_io_error)?;
+    write_panel_footer(&mut session.writer, line_width, COLOR_AUTHORIZATION, styled)
+        .map_err(permission_io_error)?;
     Ok(selected == 0)
 }
 
@@ -514,6 +576,7 @@ fn write_panel_title<W: Write>(
     title: &str,
     width: usize,
     blank_before: bool,
+    accent: Color,
     styled: bool,
 ) -> io::Result<()> {
     if blank_before {
@@ -523,7 +586,7 @@ fn write_panel_title<W: Write>(
     if styled {
         queue!(
             writer,
-            SetForegroundColor(Color::DarkCyan),
+            SetForegroundColor(accent),
             SetAttribute(Attribute::Bold),
             crossterm::style::Print(heading),
             SetAttribute(Attribute::Reset),
@@ -535,13 +598,18 @@ fn write_panel_title<W: Write>(
     writer.write_all(b"\r\n")
 }
 
-fn write_panel_footer<W: Write>(writer: &mut W, width: usize, styled: bool) -> io::Result<()> {
+fn write_panel_footer<W: Write>(
+    writer: &mut W,
+    width: usize,
+    accent: Color,
+    styled: bool,
+) -> io::Result<()> {
     let width = width.max(2);
     let footer = format!("╰{}", "─".repeat(width - 1));
     if styled {
         queue!(
             writer,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(accent),
             crossterm::style::Print(footer),
             ResetColor
         )?;
@@ -567,7 +635,7 @@ fn write_panel_field<W: Write>(
         if styled {
             queue!(
                 writer,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(COLOR_MUTED),
                 crossterm::style::Print(if index == 0 {
                     prefix.as_str()
                 } else {
@@ -607,9 +675,9 @@ fn write_muted_line<W: Write>(
         if styled {
             queue!(
                 writer,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(COLOR_MUTED),
                 crossterm::style::Print(if index == 0 { "  · " } else { "    " }),
-                SetForegroundColor(Color::Grey),
+                SetForegroundColor(COLOR_BODY),
                 crossterm::style::Print(line),
                 ResetColor
             )?;
@@ -630,6 +698,7 @@ fn write_section_label<W: Write>(
     writer: &mut W,
     text: &str,
     width: usize,
+    accent: Color,
     styled: bool,
 ) -> io::Result<()> {
     writer.write_all(b"\r\n")?;
@@ -637,7 +706,7 @@ fn write_section_label<W: Write>(
     if styled {
         queue!(
             writer,
-            SetForegroundColor(Color::DarkCyan),
+            SetForegroundColor(accent),
             crossterm::style::Print(line),
             ResetColor
         )?;
@@ -707,6 +776,7 @@ fn select_menu<W: Write>(
     default_index: usize,
     cancel_index: usize,
     prompt: &str,
+    accent: Color,
 ) -> Result<usize> {
     if options.is_empty() || default_index >= options.len() || cancel_index >= options.len() {
         return Err(OttoError::Permission(
@@ -734,6 +804,7 @@ fn select_menu<W: Write>(
         None,
         0,
         false,
+        accent,
     )
     .map_err(permission_io_error)?;
 
@@ -757,6 +828,7 @@ fn select_menu<W: Write>(
                 Some(cancel_index),
                 rendered_rows,
                 true,
+                accent,
             )
             .map_err(permission_io_error)?;
             return Ok(cancel_index);
@@ -773,6 +845,7 @@ fn select_menu<W: Write>(
                 Some(index),
                 rendered_rows,
                 true,
+                accent,
             )
             .map_err(permission_io_error)?;
             return Ok(index);
@@ -792,6 +865,7 @@ fn select_menu<W: Write>(
                     Some(selected),
                     rendered_rows,
                     true,
+                    accent,
                 )
                 .map_err(permission_io_error)?;
                 return Ok(selected);
@@ -811,6 +885,7 @@ fn select_menu<W: Write>(
                 None,
                 rendered_rows,
                 true,
+                accent,
             )
             .map_err(permission_io_error)?;
         }
@@ -860,6 +935,7 @@ fn render_menu<W: Write>(
     confirmed: Option<usize>,
     previous_rows: usize,
     replace_existing: bool,
+    accent: Color,
 ) -> io::Result<()> {
     let lines = option_lines(options, selected, visible_count, line_width);
     let prompt_line = menu_prompt(prompt, selected, options.len(), line_width);
@@ -867,12 +943,12 @@ fn render_menu<W: Write>(
         queue!(writer, MoveUp(previous_rows as u16), MoveToColumn(0))?;
         for option in &lines {
             queue!(writer, Clear(ClearType::CurrentLine))?;
-            write_menu_option(writer, option)?;
+            write_menu_option(writer, option, accent)?;
             queue!(writer, MoveToColumn(0), crossterm::cursor::MoveDown(1))?;
         }
     } else {
         for option in &lines {
-            write_menu_option(writer, option)?;
+            write_menu_option(writer, option, accent)?;
             writer.write_all(b"\r\n")?;
         }
     }
@@ -883,7 +959,7 @@ fn render_menu<W: Write>(
     };
     queue!(writer, Clear(ClearType::CurrentLine))?;
     if colors_enabled() {
-        queue!(writer, SetForegroundColor(Color::Grey))?;
+        queue!(writer, SetForegroundColor(COLOR_BODY))?;
     }
     crossterm::queue!(writer, crossterm::style::Print(prompt_line))?;
     if colors_enabled() {
@@ -897,11 +973,11 @@ fn render_menu<W: Write>(
     writer.flush()
 }
 
-fn write_menu_option<W: Write>(writer: &mut W, option: &str) -> io::Result<()> {
+fn write_menu_option<W: Write>(writer: &mut W, option: &str, accent: Color) -> io::Result<()> {
     if option.starts_with('>') && colors_enabled() {
         queue!(
             writer,
-            SetForegroundColor(Color::DarkCyan),
+            SetForegroundColor(accent),
             SetAttribute(Attribute::Bold),
             crossterm::style::Print(option),
             SetAttribute(Attribute::Reset),
@@ -910,7 +986,7 @@ fn write_menu_option<W: Write>(writer: &mut W, option: &str) -> io::Result<()> {
     } else if colors_enabled() {
         queue!(
             writer,
-            SetForegroundColor(Color::Grey),
+            SetForegroundColor(COLOR_BODY),
             crossterm::style::Print(option),
             ResetColor
         )?;
@@ -1000,7 +1076,7 @@ fn write_bash_code_frame<W: Write>(
     if styled {
         queue!(
             writer,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(COLOR_MUTED),
             crossterm::style::Print(line),
             ResetColor
         )?;
@@ -1021,9 +1097,9 @@ fn write_bash_command_line<W: Write>(
         if styled {
             queue!(
                 writer,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(COLOR_MUTED),
                 crossterm::style::Print("  │ "),
-                SetForegroundColor(Color::DarkCyan),
+                SetForegroundColor(COLOR_BRAND),
                 crossterm::style::Print(segment),
                 ResetColor
             )?;
