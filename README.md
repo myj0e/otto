@@ -8,7 +8,7 @@
 
 OTTO is an AI assistant that runs in your terminal. Ask questions in natural language to get answers, explain code, analyze the current project, work with files, and search or read web pages after configuration.
 
-It is designed for one clear task at a time: every command is an independent request and does not automatically include content from previous calls. OTTO asks for authorization before modifying local files; file discovery and reads are allowed by default.
+It is designed for one clear task at a time: every command is an independent request and does not automatically include content from previous calls. OTTO asks for authorization before modifying local files or running Bash commands; file discovery and reads are allowed by default.
 
 > A wise man in a wheelchair speeds past, bringing words of wisdom. Unfortunately, his memory is unreliable: ~~at sunrise he forgets yesterday~~ next time he will forget this conversation.
 
@@ -16,6 +16,7 @@ It is designed for one clear task at a time: every command is an independent req
 
 - Explain errors, commands, and code to help locate problems.
 - Read files in the current project, find related code, and summarize its structure.
+- Run non-interactive Bash scripts after per-command authorization.
 - Create, modify, or organize files after authorization.
 - Configure web search to find current information, documentation, and web pages.
 - Adjust the response style with modes such as technical review, concise answers, or character-driven responses.
@@ -151,7 +152,11 @@ otto "Find every file that handles user login and explain the call relationships
 otto --root ~/projects/demo "Check this project's configuration"
 ```
 
-`glob`, `grep`, and `read` are read-only tools allowed by default and do not ask for authorization. `edit` and `write` still ask before changing files. OTTO only handles relative paths inside the current workspace.
+`glob`, `grep`, and `read` are read-only tools allowed by default and do not ask for authorization. `edit` and `write` ask before changing files. The `bash` tool requires a new authorization for every call, including commands that appear read-only. Its `tool_call` returns the complete script together with `risk`, `reason`, and `breakdown` fields, which the prompt uses to show a risk summary and command structure. Commands judged possibly modifying or uncertain receive a muted yellow warning. Missing or invalid fields are treated as uncertain. The command and assessment come from the same model response, so the assessment is advisory and may be wrong; it never replaces user authorization.
+
+Bash runs non-interactively with the workspace as its current directory, a 120-second time limit, and bounded captured output. One approval covers the complete script, including its pipelines, conditional commands, and child processes. The workspace directory is not a sandbox: Bash runs with OTTO's operating-system permissions and can access paths outside the workspace. Time and output limits do not confine side effects; a deliberately detached process may outlive the Bash call. Command output is returned to the model, so review commands that may expose sensitive data. Interactive terminal programs are not supported by the Bash tool.
+
+In an interactive terminal, OTTO uses a compact shared layout for model status, execution notes, tool activity, authorization, configuration, and final answers. The final answer stays plain on standard output when piped; status and authorization stay on standard error. Colors are muted and respect `NO_COLOR` and `TERM=dumb`.
 
 ## Web search
 
@@ -307,7 +312,7 @@ cat error.log | otto "Analyze this log and suggest troubleshooting steps"
 
 Command-line arguments become the question. Non-interactive standard input is read as additional context and passed to the model with explicit boundaries; it is not treated as another command to execute. Use `--no-stdin` when a script has already processed its input.
 
-When local files need to be changed, OTTO displays an authorization prompt on standard error or the controlling terminal. Use the arrow keys and Enter, or press `1` (this request), `2` (allow this tool for the rest of the run), or `3` (deny). Authorization details never go to standard output. `glob`, `grep`, and `read` are allowed read-only tools and do not show this prompt.
+When a tool needs authorization, OTTO displays a prompt on standard error or the controlling terminal. For ordinary tools, use the arrow keys and Enter, or press `1` (this request), `2` (allow this tool for the rest of the run), or `3` (deny). Bash also supports the arrow keys and Enter, starts with “Deny” selected, and offers `1` to allow the displayed script once or `2` to deny. Authorization details never go to standard output. `glob`, `grep`, and `read` are allowed read-only tools and do not show a prompt. If OTTO cannot obtain an interactive terminal, it refuses the operation.
 
 ## Install, upgrade, and uninstall
 

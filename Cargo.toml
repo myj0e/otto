@@ -1,6 +1,6 @@
 [package]
 name = "otto"
-version = "1.0.0"
+version = "1.5.0"
 edition = "2021"
 description = "One-time.Talk once CLI assistant"
 publish = false
@@ -33,6 +33,6 @@ sha2 = "0.10"
 similar = "2"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 url = "2"
 walkdir = "2"

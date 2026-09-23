@@ -1,3 +1,4 @@
+mod bash;
 mod local;
 mod native_search;
 mod web;
@@ -77,6 +78,7 @@ impl ToolRegistry {
             tools: HashMap::new(),
             ordered: Vec::new(),
         };
+        registry.register(bash::BashTool);
         registry.register(local::GlobTool);
         registry.register(local::GrepTool);
         registry.register(local::ReadTool);

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 use crate::error::{OttoError, Result};
+use crate::ui;
 
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_NAME: &str = "Openai";
@@ -339,11 +340,7 @@ pub fn save_values(
 }
 
 fn read_line(prompt: &str, default: Option<&str>) -> Result<String> {
-    match default.filter(|value| !value.is_empty()) {
-        Some(value) => print!("{prompt} [{value}]: "),
-        None => print!("{prompt}: "),
-    }
-    io::stdout().flush()?;
+    ui::write_input_prompt(prompt, default)?;
 
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
@@ -378,8 +375,7 @@ fn read_secret_from_terminal() -> io::Result<String> {
     // Configure the terminal before printing the prompt so fast pseudo-
     // terminal writers cannot leak the secret between those two operations.
     let read_result = (|| {
-        print!("API Key: ");
-        io::stdout().flush()?;
+        crate::ui::write_input_prompt("API Key", None)?;
         let mut line = String::new();
         stdin.read_line(&mut line)?;
         Ok(line)
@@ -413,28 +409,27 @@ fn read_secret(default: Option<&str>) -> Result<String> {
 
 fn confirm(prompt: &str) -> Result<bool> {
     loop {
-        print!("{prompt} [Y/n]: ");
-        io::stdout().flush()?;
+        ui::write_input_prompt(prompt, Some("Y/n"))?;
         let mut line = String::new();
         io::stdin().read_line(&mut line)?;
         match line.trim().to_ascii_lowercase().as_str() {
             "" | "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
-            _ => println!("请输入 y 或 n。"),
+            _ => ui::print_error("请输入 y 或 n。"),
         }
     }
 }
 
-fn print_masked_key(apikey: &str) {
+fn masked_key(apikey: &str) -> String {
     if apikey.is_empty() {
-        println!("  API Key: <empty>");
+        "<empty>".to_owned()
     } else if apikey.chars().count() <= 8 {
-        println!("  API Key: ********");
+        "********".to_owned()
     } else {
         let characters: Vec<char> = apikey.chars().collect();
         let prefix: String = characters.iter().take(4).collect();
         let suffix: String = characters.iter().rev().take(4).rev().collect();
-        println!("  API Key: {}****{}", prefix, suffix);
+        format!("{prefix}****{suffix}")
     }
 }
 
@@ -446,6 +441,10 @@ pub fn interactive(path: &Path) -> Result<()> {
     }
 
     let (mut config, _) = load(path)?;
+    ui::print_screen_header(
+        "OTTO · 配置",
+        "Enter 保留方括号中的当前值；API Key 输入时不回显。",
+    );
     let name = read_line("Name", Some(config.name.as_deref().unwrap_or(DEFAULT_NAME)))?;
     let baseurl = read_line(
         "Base URL",
@@ -457,7 +456,7 @@ pub fn interactive(path: &Path) -> Result<()> {
         if !value.is_empty() {
             break value;
         }
-        println!("API Key 不能为空，请重新输入。");
+        ui::print_error("API Key 不能为空，请重新输入。");
     };
     let model = read_line("Model", Some(&config.model))?;
 
@@ -467,21 +466,20 @@ pub fn interactive(path: &Path) -> Result<()> {
     config.model = model;
     validate(&config)?;
 
-    println!();
-    println!("配置摘要：");
-    println!("  Name: {}", config.name.as_deref().unwrap_or_default());
-    println!(
-        "  Base URL: {}",
-        config.baseurl.as_deref().unwrap_or_default()
-    );
-    print_masked_key(config.apikey.as_deref().unwrap_or_default());
-    println!("  Model: {}", config.model);
+    let masked_key = masked_key(config.apikey.as_deref().unwrap_or_default());
+    let summary = [
+        ("服务", config.name.as_deref().unwrap_or_default()),
+        ("地址", config.baseurl.as_deref().unwrap_or_default()),
+        ("API Key", masked_key.as_str()),
+        ("模型", config.model.as_str()),
+    ];
+    ui::print_summary("配置预览", &summary);
 
     if confirm("保存配置")? {
         save_atomic(path, &config)?;
-        println!("配置已保存到 {}", path.display());
+        ui::print_status(&format!("配置已保存 · {}", path.display()));
     } else {
-        println!("配置未保存。");
+        ui::print_status("配置未保存");
     }
     Ok(())
 }
