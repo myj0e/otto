@@ -253,6 +253,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "bash",
                 "glob",
                 "grep",
                 "read",
