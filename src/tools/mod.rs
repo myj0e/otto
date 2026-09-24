@@ -1,6 +1,7 @@
 mod bash;
 mod local;
 mod native_search;
+mod otto_storage;
 mod web;
 
 use std::collections::HashMap;
@@ -84,6 +85,7 @@ impl ToolRegistry {
         registry.register(local::ReadTool);
         registry.register(local::EditTool);
         registry.register(local::WriteTool);
+        registry.register(otto_storage::OttoStorageTool);
         registry.register(web::WebSearchTool);
         registry.register(web::WebFetchTool);
         registry

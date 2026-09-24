@@ -5,6 +5,7 @@ use crate::error::{OttoError, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Ask,
+    SessionList,
     Config,
     Mode,
     Help,
@@ -25,6 +26,9 @@ pub struct CliOptions {
     pub root: Option<PathBuf>,
     pub no_agent: bool,
     pub no_stdin: bool,
+    pub new_session: bool,
+    pub session: Option<String>,
+    pub session_list: bool,
 }
 
 impl Default for CliOptions {
@@ -42,6 +46,9 @@ impl Default for CliOptions {
             root: None,
             no_agent: false,
             no_stdin: false,
+            new_session: false,
+            session: None,
+            session_list: false,
         }
     }
 }
@@ -140,9 +147,18 @@ fn parse_mode(arguments: &[String]) -> Result<CliOptions> {
         return Ok(options);
     } else if matches!(
         arguments[1].as_str(),
-        "--" | "--no-agent" | "-A" | "--no-stdin" | "-S" | "--root" | "-r"
+        "--" | "--no-agent"
+            | "-A"
+            | "--no-stdin"
+            | "-S"
+            | "--root"
+            | "-r"
+            | "--new-session"
+            | "--session"
+            | "--session-list"
     ) || arguments[1].starts_with("--root=")
         || arguments[1].starts_with("-r=")
+        || arguments[1].starts_with("--session=")
     {
         options.raw_mode = true;
         index = 1;
@@ -169,7 +185,7 @@ fn parse_question_tail(
             options
                 .prompt
                 .extend(arguments[index + 1..].iter().cloned());
-            return Ok(options);
+            return finish_question_options(options);
         }
         if arguments[index] == "--no-agent" || arguments[index] == "-A" {
             options.no_agent = true;
@@ -178,6 +194,35 @@ fn parse_question_tail(
         }
         if arguments[index] == "--no-stdin" || arguments[index] == "-S" {
             options.no_stdin = true;
+            index += 1;
+            continue;
+        }
+        if arguments[index] == "--new-session" {
+            options.new_session = true;
+            index += 1;
+            continue;
+        }
+        if arguments[index] == "--session-list" {
+            options.session_list = true;
+            index += 1;
+            continue;
+        }
+        if arguments[index] == "--session" {
+            if index + 1 < arguments.len() && !arguments[index + 1].starts_with('-') {
+                options.session = Some(arguments[index + 1].clone());
+                index += 2;
+            } else {
+                options.session_list = true;
+                index += 1;
+            }
+            continue;
+        }
+        if let Some(value) = arguments[index].strip_prefix("--session=") {
+            if value.is_empty() {
+                options.session_list = true;
+            } else {
+                options.session = Some(value.to_owned());
+            }
             index += 1;
             continue;
         }
@@ -195,7 +240,22 @@ fn parse_question_tail(
         // `-m` or `--no-agent` may be part of the question and must not be
         // parsed as Otto options.
         options.prompt.extend(arguments[index..].iter().cloned());
-        return Ok(options);
+        return finish_question_options(options);
+    }
+    finish_question_options(options)
+}
+
+fn finish_question_options(mut options: CliOptions) -> Result<CliOptions> {
+    if options.new_session && options.session.is_some() {
+        return Err(usage_error("--new-session 与 --session 不能同时使用"));
+    }
+    if options.session_list
+        && (options.new_session || options.session.is_some() || !options.prompt.is_empty())
+    {
+        return Err(usage_error("列出会话时不能同时指定会话操作或问题"));
+    }
+    if options.session_list {
+        options.command = Command::SessionList;
     }
     Ok(options)
 }
@@ -229,10 +289,15 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<CliOptions> 
             prompt: arguments[1..].to_vec(),
             ..CliOptions::default()
         }),
-        "--no-agent" | "-A" | "--no-stdin" | "-S" | "--root" | "-r" => {
+        "--no-agent" | "-A" | "--no-stdin" | "-S" | "--root" | "-r" | "--new-session"
+        | "--session" | "--session-list" => {
             parse_question_tail(&arguments, 0, CliOptions::default())
         }
-        argument if argument.starts_with("--root=") || argument.starts_with("-r=") => {
+        argument
+            if argument.starts_with("--root=")
+                || argument.starts_with("-r=")
+                || argument.starts_with("--session=") =>
+        {
             parse_question_tail(&arguments, 0, CliOptions::default())
         }
         argument if argument.starts_with('-') => Err(usage_error(format!(
@@ -262,6 +327,10 @@ pub fn print_help() {
     println!("  otto --mode -- <question...>");
     println!("  otto --root <directory> <question...>");
     println!("  otto -r <directory> <question...>");
+    println!("  otto --new-session <question...>");
+    println!("  otto --session <id-or-prefix> <question...>");
+    println!("  otto --session");
+    println!("  otto --session-list");
     println!("  otto --no-agent <question...>");
     println!("  otto -A <question...>");
     println!("  otto --no-stdin <question...>");
@@ -280,6 +349,9 @@ pub fn print_help() {
     println!("  -k, --apikey       Configure the API key");
     println!("  -M, --model        Configure the model name");
     println!("  -r, --root         Set the workspace root");
+    println!("      --new-session  Start and save a new conversation session");
+    println!("      --session      Resume a session, or list sessions without an ID");
+    println!("      --session-list List saved conversation sessions");
     println!("  -A, --no-agent     Disable Agent tool calls");
     println!("  -S, --no-stdin     Ignore standard input");
     println!("  -h, --help         Show help");
@@ -293,6 +365,7 @@ pub fn print_help() {
     println!("  Normal requests load system.md and the currently selected mode.");
     println!("  Responses use SSE streaming by default.");
     println!("  Agent is enabled by default; --no-agent sends an ordinary Chat request only.");
+    println!("  Sessions are stored in the workspace .otto/sessions directory.");
     println!("  Set OTTO_MAX_AGENT_ROUNDS to control the Agent limit (default 8, range 0-255, 0 means unlimited).");
 }
 

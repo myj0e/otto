@@ -872,6 +872,7 @@ dependencies = [
  "async-trait",
  "crossterm",
  "futures-util",
+ "getrandom 0.4.3",
  "globset",
  "libc",
  "regex",

@@ -152,7 +152,32 @@ otto "Find every file that handles user login and explain the call relationships
 otto --root ~/projects/demo "Check this project's configuration"
 ```
 
-`glob`, `grep`, and `read` are read-only tools allowed by default and do not ask for authorization. `edit` and `write` ask before changing files. The `bash` tool requires a new authorization for every call, including commands that appear read-only. Its `tool_call` returns the complete script together with `risk`, `reason`, and `breakdown` fields, which the prompt uses to show a risk summary and command structure. Commands judged possibly modifying or uncertain receive a muted yellow warning. Missing or invalid fields are treated as uncertain. The command and assessment come from the same model response, so the assessment is advisory and may be wrong; it never replaces user authorization.
+`glob`, `grep`, and `read` are read-only tools allowed by default and do not ask for authorization. `edit` and `write` ask before changing ordinary workspace files; ordinary files inside `.otto/` are allowed by default as described below. The `.otto/sessions/` cache is managed internally by OTTO and is inaccessible to generic file and storage tools. The `bash` tool requires a new authorization for every call, including commands that appear read-only. Its `tool_call` returns the complete script together with `risk`, `reason`, and `breakdown` fields, which the prompt uses to show a risk summary and command structure. Commands judged possibly modifying or uncertain receive a muted yellow warning. Missing or invalid fields are treated as uncertain. The command and assessment come from the same model response, so the assessment is advisory and may be wrong; it never replaces user authorization.
+
+`otto_storage` manages `.otto/` at the workspace root. It can initialize the directory and list, read, create, update, or delete ordinary files using paths relative to `.otto/`. This directory holds workspace-local data managed by OTTO features, such as project overviews. Operations through this tool, as well as `edit` and `write` within `.otto/`, are allowed by default. Session history is stored in `.otto/sessions/`, reserved for OTTO's session manager, and ignored by Git.
+
+### Save and resume a conversation
+
+Conversations are not saved unless requested. Start a saved session with `--new-session`:
+
+```bash
+otto --new-session "Review this project's module structure"
+```
+
+After the answer, OTTO prints the session ID and a one-sentence description based on the first turn. List existing sessions with either command:
+
+```bash
+otto --session-list
+otto --session
+```
+
+Resume a session with its full ID or a unique prefix:
+
+```bash
+otto --session 8f41a2c0 "Continue reviewing configuration loading"
+```
+
+Sessions are workspace-local. Only one OTTO request may use a session at a time; a concurrent request is rejected with a retry message. The archive keeps the full message history. For longer sessions, OTTO generates a rolling summary and sends it alongside the most recent complete turns.
 
 Bash runs non-interactively with the workspace as its current directory, a 120-second time limit, and bounded captured output. One approval covers the complete script, including its pipelines, conditional commands, and child processes. The workspace directory is not a sandbox: Bash runs with OTTO's operating-system permissions and can access paths outside the workspace. Time and output limits do not confine side effects; a deliberately detached process may outlive the Bash call. Command output is returned to the model, so review commands that may expose sensitive data. Interactive terminal programs are not supported by the Bash tool.
 

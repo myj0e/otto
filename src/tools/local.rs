@@ -217,6 +217,7 @@ impl Tool for GlobTool {
             .follow_links(false)
             .max_depth(32)
             .into_iter()
+            .filter_entry(|entry| !context.workspace.is_session_storage_path(entry.path()))
             .filter_map(|entry| entry.ok())
         {
             let file_type = entry.file_type();
@@ -293,6 +294,7 @@ impl Tool for GrepTool {
             .follow_links(false)
             .max_depth(32)
             .into_iter()
+            .filter_entry(|entry| !context.workspace.is_session_storage_path(entry.path()))
             .filter_map(|entry| entry.ok())
         {
             if !entry.file_type().is_file() {
@@ -367,13 +369,23 @@ impl Tool for ReadTool {
         let input = required_string(&arguments, "path")?;
         let line_start = optional_usize(&arguments, "line_start", 1, 1_000_000)?;
         let line_end = optional_usize(&arguments, "line_end", 1_000_000, 1_000_000)?;
-        authorize(
-            context,
-            self.name(),
-            Capability::Read,
-            &format!("读取本地文本文件 {input}"),
-        )?;
-        let path = context.workspace.resolve_existing(&input)?;
+        let in_otto_storage = context.workspace.otto_relative_path(&input)?.is_some();
+        if !in_otto_storage {
+            authorize(
+                context,
+                self.name(),
+                Capability::Read,
+                &format!("读取本地文本文件 {input}"),
+            )?;
+        }
+        let path = if in_otto_storage {
+            context
+                .workspace
+                .resolve_otto_workspace_existing(&input)?
+                .ok_or_else(|| OttoError::Tool("无法解析 .otto 文件路径".to_owned()))?
+        } else {
+            context.workspace.resolve_existing(&input)?
+        };
         require_file(&path, &input)?;
         let content = read_utf8(&path, &input, MAX_READ_BYTES)?;
         let lines: Vec<&str> = content.lines().collect();
@@ -405,7 +417,7 @@ impl Tool for EditTool {
     fn definition(&self) -> Value {
         function_definition(
             self.name(),
-            "在 workspace 内的 UTF-8 文本文件中进行精确文本替换，并返回 unified diff。",
+            "在 workspace 内的 UTF-8 文本文件中进行精确文本替换，并返回 unified diff；workspace 根目录 .otto 内的普通数据默认允许修改，.otto/sessions 由 OTTO 内部保留。",
             json!({
                 "path": {"type": "string"},
                 "old_text": {"type": "string"},
@@ -427,13 +439,23 @@ impl Tool for EditTool {
         let new_text = required_string_allow_empty(&arguments, "new_text")?;
         let replace_all = optional_bool(&arguments, "replace_all", false)?;
         let expected_sha256 = optional_string(&arguments, "expected_sha256")?;
-        authorize(
-            context,
-            self.name(),
-            Capability::Write,
-            &format!("修改本地文本文件 {input}"),
-        )?;
-        let path = context.workspace.resolve_existing(&input)?;
+        let in_otto_storage = context.workspace.otto_relative_path(&input)?.is_some();
+        if !in_otto_storage {
+            authorize(
+                context,
+                self.name(),
+                Capability::Write,
+                &format!("修改本地文本文件 {input}"),
+            )?;
+        }
+        let path = if in_otto_storage {
+            context
+                .workspace
+                .resolve_otto_workspace_existing(&input)?
+                .ok_or_else(|| OttoError::Tool("无法解析 .otto 文件路径".to_owned()))?
+        } else {
+            context.workspace.resolve_existing(&input)?
+        };
         require_file(&path, &input)?;
         let original_bytes = fs::read(&path)?;
         if original_bytes.len() as u64 > MAX_EDIT_BYTES {
@@ -491,7 +513,7 @@ impl Tool for WriteTool {
     fn definition(&self) -> Value {
         function_definition(
             self.name(),
-            "在 workspace 内创建或覆盖 UTF-8 文本文件，写入前会请求用户授权。",
+            "在 workspace 内创建或覆盖 UTF-8 文本文件；workspace 根目录 .otto 内的普通数据默认允许写入，其他路径写入前会请求授权。.otto/sessions 由 OTTO 内部保留。",
             json!({
                 "path": {"type": "string"},
                 "content": {"type": "string"},
@@ -509,13 +531,23 @@ impl Tool for WriteTool {
             .and_then(Value::as_str)
             .ok_or_else(|| OttoError::Tool("缺少字符串参数：content".to_owned()))?;
         let expected_sha256 = optional_string(&arguments, "expected_sha256")?;
-        authorize(
-            context,
-            self.name(),
-            Capability::Write,
-            &format!("创建或覆盖本地文本文件 {input}"),
-        )?;
-        let path = context.workspace.resolve_for_create(&input)?;
+        let in_otto_storage = context.workspace.otto_relative_path(&input)?.is_some();
+        if !in_otto_storage {
+            authorize(
+                context,
+                self.name(),
+                Capability::Write,
+                &format!("创建或覆盖本地文本文件 {input}"),
+            )?;
+        }
+        let path = if in_otto_storage {
+            context
+                .workspace
+                .resolve_otto_workspace_for_create(&input)?
+                .ok_or_else(|| OttoError::Tool("无法解析 .otto 文件路径".to_owned()))?
+        } else {
+            context.workspace.resolve_for_create(&input)?
+        };
         if let Ok(existing) = fs::read(&path) {
             check_expected_hash(&existing, expected_sha256.as_deref())?;
         } else if expected_sha256.is_some() {

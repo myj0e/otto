@@ -2,5 +2,6 @@ core
 core.*
 *.tmp
 /target/
+/.otto/sessions/
 # Local source-analysis artifacts
 /.source-aware/
