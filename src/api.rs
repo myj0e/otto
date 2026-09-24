@@ -4,9 +4,13 @@ use url::Url;
 use crate::config::Config;
 use crate::error::{OttoError, Result};
 use crate::http::ApiAuth;
+use crate::usage::RequestUsage;
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
-const DEEPSEEK_MAX_TOKENS: usize = 8192;
+// DeepSeek currently permits up to 384 Ki output tokens for its supported models.
+// Keep the required Anthropic `max_tokens` field at the provider ceiling so OTTO
+// does not truncate long responses at an arbitrary lower limit.
+const DEEPSEEK_MAX_OUTPUT_TOKENS: usize = 384 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeSearchProtocol {
@@ -28,6 +32,10 @@ pub trait ApiAdapter: Sync {
     fn request_body(&self, config: &Config, messages: &[Value], tools: &[Value]) -> Result<String>;
     fn normalize_event(&self, value: &Value) -> Option<Value>;
 
+    fn usage_from_event(&self, value: &Value) -> Option<RequestUsage> {
+        usage_from_raw(value, self.id() == "deepseek-anthropic")
+    }
+
     fn native_search_protocol(&self) -> Option<NativeSearchProtocol> {
         None
     }
@@ -39,6 +47,7 @@ struct OpenAiCompatibleAdapter {
     adapter_id: &'static str,
     matcher: fn(&Config) -> bool,
     search_protocol: Option<NativeSearchProtocol>,
+    include_stream_usage: bool,
 }
 
 static DEEPSEEK: DeepSeekAdapter = DeepSeekAdapter;
@@ -46,21 +55,25 @@ static OPENROUTER: OpenAiCompatibleAdapter = OpenAiCompatibleAdapter {
     adapter_id: "openrouter",
     matcher: is_openrouter,
     search_protocol: Some(NativeSearchProtocol::OpenRouterChat),
+    include_stream_usage: true,
 };
 static ALIBABA: OpenAiCompatibleAdapter = OpenAiCompatibleAdapter {
     adapter_id: "alibaba-compatible",
     matcher: is_alibaba,
     search_protocol: Some(NativeSearchProtocol::AlibabaChat),
+    include_stream_usage: true,
 };
 static OPENAI: OpenAiCompatibleAdapter = OpenAiCompatibleAdapter {
     adapter_id: "openai",
     matcher: is_openai,
     search_protocol: Some(NativeSearchProtocol::OpenAiChat),
+    include_stream_usage: true,
 };
 static OPENAI_COMPATIBLE_FALLBACK: OpenAiCompatibleAdapter = OpenAiCompatibleAdapter {
     adapter_id: "openai-compatible-fallback",
     matcher: |_| false,
     search_protocol: Some(NativeSearchProtocol::OpenAiChat),
+    include_stream_usage: false,
 };
 
 pub fn adapter_for(config: &Config) -> &'static dyn ApiAdapter {
@@ -122,12 +135,30 @@ fn check_request_size(body: String) -> Result<String> {
     Ok(body)
 }
 
-fn openai_request_body(config: &Config, messages: &[Value], tools: &[Value]) -> Result<String> {
+fn openai_request_body(
+    config: &Config,
+    messages: &[Value],
+    tools: &[Value],
+    include_stream_usage: bool,
+) -> Result<String> {
+    let messages = messages
+        .iter()
+        .map(|message| {
+            let mut message = message.clone();
+            if let Some(object) = message.as_object_mut() {
+                object.remove("_otto_cache_prefix");
+            }
+            message
+        })
+        .collect::<Vec<_>>();
     let mut body = json!({
         "model": config.model,
         "messages": messages,
         "stream": true
     });
+    if include_stream_usage {
+        body["stream_options"] = json!({"include_usage": true});
+    }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
         body["tool_choice"] = json!("auto");
@@ -181,7 +212,7 @@ fn anthropic_tool_input(arguments: &str) -> Value {
     }
 }
 
-fn anthropic_messages(messages: &[Value]) -> (String, Vec<Value>) {
+fn anthropic_messages(messages: &[Value]) -> (Vec<Value>, Vec<Value>) {
     let mut system = Vec::new();
     let mut converted = Vec::new();
     let mut position = 0usize;
@@ -199,7 +230,18 @@ fn anthropic_messages(messages: &[Value]) -> (String, Vec<Value>) {
                     .map(message_content_text)
                     .unwrap_or_default();
                 if !content.is_empty() {
-                    system.push(content);
+                    let mut block = json!({"type": "text", "text": content});
+                    // The base prompt and agent instructions are unchanged
+                    // across turns. Keep the rolling summary in a later block
+                    // so it does not invalidate this stable cache prefix.
+                    if message
+                        .get("_otto_cache_prefix")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        block["cache_control"] = json!({"type": "ephemeral"});
+                    }
+                    system.push(block);
                 }
                 position += 1;
             }
@@ -277,19 +319,19 @@ fn anthropic_messages(messages: &[Value]) -> (String, Vec<Value>) {
         }
     }
 
-    (system.join("\n\n"), converted)
+    (system, converted)
 }
 
 fn anthropic_request_body(config: &Config, messages: &[Value], tools: &[Value]) -> Result<String> {
     let (system, messages) = anthropic_messages(messages);
     let mut body = json!({
         "model": config.model,
-        "max_tokens": DEEPSEEK_MAX_TOKENS,
+        "max_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
         "messages": messages,
         "stream": true
     });
     if !system.is_empty() {
-        body["system"] = Value::String(system);
+        body["system"] = Value::Array(system);
     }
     let tools = anthropic_tools(tools);
     if !tools.is_empty() {
@@ -297,6 +339,77 @@ fn anthropic_request_body(config: &Config, messages: &[Value], tools: &[Value]) 
         body["tool_choice"] = json!({"type": "auto"});
     }
     check_request_size(body.to_string())
+}
+
+fn token_count(value: &Value) -> Option<u64> {
+    value.as_u64()
+}
+
+fn openai_usage(value: &Value) -> Option<RequestUsage> {
+    let usage = value.get("usage")?;
+    let details = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"));
+    let request = RequestUsage {
+        input_tokens: usage
+            .get("prompt_tokens")
+            .or_else(|| usage.get("input_tokens"))
+            .and_then(token_count),
+        output_tokens: usage
+            .get("completion_tokens")
+            .or_else(|| usage.get("output_tokens"))
+            .and_then(token_count),
+        cache_read_input_tokens: details
+            .and_then(|details| details.get("cached_tokens"))
+            .or_else(|| usage.get("cached_tokens"))
+            .or_else(|| usage.get("prompt_cache_hit_tokens"))
+            .and_then(token_count),
+        cache_write_input_tokens: usage
+            .get("cache_creation_input_tokens")
+            .or_else(|| usage.get("cache_write_input_tokens"))
+            .and_then(token_count),
+    };
+    request.has_usage().then_some(request)
+}
+
+fn anthropic_usage(value: &Value) -> Option<RequestUsage> {
+    let usage = value
+        .pointer("/message/usage")
+        .or_else(|| value.get("usage"))?;
+    let uncached_input = usage.get("input_tokens").and_then(token_count);
+    let cache_read = usage.get("cache_read_input_tokens").and_then(token_count);
+    let cache_write = usage
+        .get("cache_creation_input_tokens")
+        .and_then(token_count);
+    let output_tokens = if value.get("type").and_then(Value::as_str) == Some("message_start") {
+        None
+    } else {
+        usage.get("output_tokens").and_then(token_count)
+    };
+    let input_tokens = (uncached_input.is_some() || cache_read.is_some() || cache_write.is_some())
+        .then(|| {
+            uncached_input
+                .into_iter()
+                .chain(cache_read)
+                .chain(cache_write)
+                .try_fold(0u64, u64::checked_add)
+        })
+        .flatten();
+    let request = RequestUsage {
+        input_tokens,
+        output_tokens,
+        cache_read_input_tokens: cache_read,
+        cache_write_input_tokens: cache_write,
+    };
+    request.has_usage().then_some(request)
+}
+
+pub fn usage_from_raw(value: &Value, anthropic: bool) -> Option<RequestUsage> {
+    if anthropic {
+        anthropic_usage(value)
+    } else {
+        openai_usage(value)
+    }
 }
 
 fn normalized_text_event(text: &str) -> Value {
@@ -526,7 +639,7 @@ impl ApiAdapter for OpenAiCompatibleAdapter {
     }
 
     fn request_body(&self, config: &Config, messages: &[Value], tools: &[Value]) -> Result<String> {
-        openai_request_body(config, messages, tools)
+        openai_request_body(config, messages, tools, self.include_stream_usage)
     }
 
     fn normalize_event(&self, value: &Value) -> Option<Value> {

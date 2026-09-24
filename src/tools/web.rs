@@ -166,11 +166,33 @@ fn search_provider(config: &SearchConfig) -> Result<Box<dyn SearchProvider>> {
 async fn response_body(response: reqwest::Response, maximum: usize) -> Result<Vec<u8>> {
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let mut stream = response.bytes_stream();
+        let mut body = Vec::with_capacity(8 * 1024);
+        let mut truncated = false;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| OttoError::Network(error.to_string()))?;
+            let available = (8 * 1024usize).saturating_sub(body.len());
+            let keep = available.min(chunk.len());
+            body.extend_from_slice(&chunk[..keep]);
+            if keep < chunk.len() {
+                truncated = true;
+                break;
+            }
+        }
+        let body = String::from_utf8_lossy(&body);
         return Err(OttoError::Tool(if body.is_empty() {
             format!("HTTP {}", status.as_u16())
         } else {
-            format!("HTTP {}：{}", status.as_u16(), body)
+            format!(
+                "HTTP {}：{}{}",
+                status.as_u16(),
+                body,
+                if truncated {
+                    "…[响应已截断]"
+                } else {
+                    ""
+                }
+            )
         }));
     }
 
@@ -393,6 +415,7 @@ impl Tool for WebSearchTool {
                 &query,
                 count,
                 language.as_deref(),
+                context.usage,
             )
             .await
             {

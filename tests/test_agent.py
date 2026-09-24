@@ -2,15 +2,18 @@
 """Exercise the Rust Agent tool-call loop against a local mock endpoint."""
 
 import json
+import fcntl
 import os
 import pathlib
 import pty
 import select
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import termios
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -179,6 +182,7 @@ def main():
             )
 
             master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
             process = subprocess.Popen(
                 [binary, "读取 note.txt"],
                 stdin=slave,
@@ -231,10 +235,10 @@ def main():
                 )
             if "先读取这个文件，再根据内容回答。".encode() not in output:
                 raise AssertionError(f"streamed model text was not printed: {output!r}")
-            if "[otto] ⚙ 工具调用：read".encode() not in output:
+            if "工具活动".encode() not in output or b"read" not in output:
                 raise AssertionError(f"tool summary was not printed: {output!r}")
-            if "[otto] 模型说明：".encode() in output:
-                raise AssertionError(f"model text was printed twice: {output!r}")
+            if output.count("先读取这个文件，再根据内容回答。".encode()) != 1:
+                raise AssertionError(f"model progress text was not shown exactly once: {output!r}")
 
             if len(requests) != 2:
                 raise AssertionError(f"expected two Agent requests, got {len(requests)}")

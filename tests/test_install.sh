@@ -41,7 +41,8 @@ OTTO_INSTALL_BINARY="$binary_path" "$install_script" \
     >"$temporary_directory/install-output"
 
 test -x "$prefix/bin/otto" || fail '可执行文件未安装'
-test "$("$prefix/bin/otto" --version)" = 'otto 1.0.0' || fail '安装的不是正式 Rust 版本'
+package_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$test_root/Cargo.toml" | head -n 1)
+test "$("$prefix/bin/otto" --version)" = "otto $package_version" || fail '安装的不是正式 Rust 版本'
 test -f "$config_dir/otto.md" || fail 'otto.md 未安装'
 test -f "$config_dir/jarvis.md" || fail 'jarvis.md 未安装'
 test -f "$config_dir/system.md" || fail '已有 system.md 被删除'

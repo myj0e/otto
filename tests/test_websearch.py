@@ -200,7 +200,7 @@ def main():
                 )
             if b"fallback final" not in process.stdout:
                 raise AssertionError(f"final answer missing: {process.stdout!r}")
-            if "[otto] ⚙ 工具调用：T-websearch".encode() not in process.stderr:
+            if "[otto] 工具 · T-websearch".encode() not in process.stderr:
                 raise AssertionError(
                     f"search route notice was not printed: {process.stderr!r}"
                 )

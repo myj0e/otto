@@ -119,7 +119,9 @@ target/release/otto "你好"
 
 配置流程中的参数也支持简写：`-n/--name`、`-b/--baseurl`（兼容 `--base-url`）、
 `-k/--apikey`（兼容 `--api-key`）和 `-M/--model`。带值选项支持空格和等号两种写法，
-例如 `-b https://example.test/v1` 或 `-b=https://example.test/v1`。
+例如 `-b https://example.test/v1` 或 `-b=https://example.test/v1`。可选参数
+`--context-window-tokens N` 用于显示最近请求的窗口占用并启用保守的本地上下文预算；
+模型上限未知时设置为 `auto`。
 
 问题参数可以直接写成多个单词，OTTO 会自动用空格拼接：
 
@@ -179,7 +181,7 @@ otto --session
 otto --session 8f41a2c0 "接着分析配置加载流程"
 ```
 
-会话按 workspace 隔离。同一 session 同一时间只允许一个 OTTO 请求；并发请求会提示稍后重试。存档保留完整消息历史；历史较长时 OTTO 会单独生成滚动摘要，并将最近的完整回合与摘要一起提供给模型。
+会话按 workspace 隔离。同一 session 同一时间只允许一个 OTTO 请求；并发请求会提示稍后重试。存档保留完整消息历史；历史较长时 OTTO 会单独生成滚动摘要，并将最近的完整回合与摘要一起提供给模型。请求结束时，OTTO 会把服务商回报的 Token 用量写到标准错误：单轮模式显示本次累计输入/输出，session 模式显示会话累计值和按 Token 加权的缓存命中率。服务商未提供的字段会显示为不可用，不会当作零；统计随 session 一起保存。
 
 Bash 以非交互方式运行，工作目录设为 workspace，最长运行 120 秒，并限制捕获的输出大小。一次批准覆盖整段脚本，包括管道、条件命令和子进程。workspace 不是沙箱：Bash 使用 OTTO 当前操作系统账户的权限，也可以访问 workspace 外的路径。时间和输出限制不能隔离命令副作用；主动脱离进程组的后台进程可能在 Bash 调用结束后继续运行。命令输出会返回给模型；涉及敏感内容时，请先查看完整命令和授权提示。Bash 工具不支持交互式终端程序。
 

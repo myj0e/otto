@@ -13,9 +13,11 @@ use serde_json::{json, Map, Value};
 use crate::config::{Config, SearchConfig};
 use crate::error::{OttoError, Result};
 use crate::permission::PermissionManager;
+use crate::usage::TokenUsage;
 use crate::workspace::Workspace;
 
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
+pub const MAX_TURN_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub(super) fn env_value(names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
@@ -33,6 +35,8 @@ pub struct ToolContext<'a> {
     pub model_config: &'a Config,
     pub model_endpoint: &'a str,
     pub search_config: &'a SearchConfig,
+    pub usage: &'a mut TokenUsage,
+    pub remaining_tool_output_bytes: &'a mut usize,
 }
 
 #[derive(Debug, Clone)]
@@ -111,13 +115,26 @@ impl ToolRegistry {
         context: &mut ToolContext<'_>,
     ) -> ToolOutput {
         let key = name.to_ascii_lowercase();
-        let Some(tool) = self.tools.get(&key) else {
-            return ToolOutput::error(format!("未知工具：{name}"));
-        };
-        match tool.execute(arguments, context).await {
-            Ok(output) => output,
-            Err(error) => ToolOutput::error(error.to_string()),
+        let tool = self.tools.get(&key);
+        if *context.remaining_tool_output_bytes < 512 {
+            return ToolOutput::error(
+                "本轮工具输出预算已耗尽；为避免执行后无法返回结果，已跳过此次调用",
+            );
         }
+        let mut output = if let Some(tool) = tool {
+            match tool.execute(arguments, context).await {
+                Ok(output) => output,
+                Err(error) => ToolOutput::error(error.to_string()),
+            }
+        } else {
+            ToolOutput::error(format!("未知工具：{name}"))
+        };
+        let remaining = *context.remaining_tool_output_bytes;
+        if output.content.len() > remaining {
+            output.content = truncate_with_budget_notice(output.content, remaining);
+        }
+        *context.remaining_tool_output_bytes = remaining.saturating_sub(output.content.len());
+        output
     }
 }
 
@@ -221,6 +238,25 @@ pub fn truncate(mut value: String, maximum: usize) -> String {
     value
 }
 
+fn truncate_with_budget_notice(mut value: String, maximum: usize) -> String {
+    const SUFFIX: &str = "\n[otto: 本轮工具输出预算已耗尽，结果已截断]";
+    if maximum <= SUFFIX.len() {
+        let mut end = maximum.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
+        return value;
+    }
+    let mut end = maximum - SUFFIX.len();
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value.push_str(SUFFIX);
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::{function_definition, truncate, ToolRegistry};
@@ -261,9 +297,17 @@ mod tests {
                 "read",
                 "edit",
                 "write",
+                "otto_storage",
                 "websearch",
                 "webfetch"
             ]
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.as_str() == "otto_storage")
+                .count(),
+            1
         );
     }
 }

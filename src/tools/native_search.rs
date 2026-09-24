@@ -8,6 +8,7 @@ use crate::api::{self, NativeSearchProtocol};
 use crate::config::{Config, SearchConfig};
 use crate::error::{OttoError, Result};
 use crate::http::{self, ApiAuth, ChatEvent};
+use crate::usage::{RequestUsage, TokenUsage};
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -346,11 +347,13 @@ pub(super) async fn search(
     query: &str,
     count: usize,
     language: Option<&str>,
+    usage: &mut TokenUsage,
 ) -> Result<(String, Value)> {
     let protocol = protocol(search_config, model_config)?;
     let body = request_body(protocol, &model_config.model, query, count, language).to_string();
     let mut response = Response::default();
-    http::chat_stream_events(
+    let mut request_usage = RequestUsage::default();
+    let result = http::chat_stream_events(
         http::ChatRequest {
             endpoint,
             auth: if protocol == Protocol::DeepSeekAnthropic {
@@ -366,6 +369,11 @@ pub(super) async fn search(
         },
         |event| match event {
             ChatEvent::Data(value) => {
+                if let Some(update) =
+                    api::usage_from_raw(&value, protocol == Protocol::DeepSeekAnthropic)
+                {
+                    request_usage.merge(update);
+                }
                 if protocol == Protocol::DeepSeekAnthropic {
                     absorb_anthropic(&value, &mut response);
                 } else {
@@ -373,10 +381,14 @@ pub(super) async fn search(
                 }
                 Ok(())
             }
+            ChatEvent::ResponseFinished => Ok(()),
+            ChatEvent::ResponseFailed(_) => Ok(()),
             ChatEvent::Done => Ok(()),
         },
     )
-    .await?;
+    .await;
+    usage.record_request(&request_usage);
+    result?;
 
     let results = sources(&response, count);
     if results.is_empty()

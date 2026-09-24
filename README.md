@@ -117,7 +117,7 @@ target/release/otto "Hello"
 | `otto -m -- "QUESTION"` / `otto --mode -- "QUESTION"` | Disable the optional mode for this request. |
 | `otto -c` / `otto --config` | Enter model service configuration. |
 
-Configuration options also have short forms: `-n/--name`, `-b/--baseurl` (also accepting `--base-url`), `-k/--apikey` (also accepting `--api-key`), and `-M/--model`. Options with values accept both separated and equals forms, for example `-b https://example.test/v1` or `-b=https://example.test/v1`.
+Configuration options also have short forms: `-n/--name`, `-b/--baseurl` (also accepting `--base-url`), `-k/--apikey` (also accepting `--api-key`), and `-M/--model`. Options with values accept both separated and equals forms, for example `-b https://example.test/v1` or `-b=https://example.test/v1`. Optionally set `--context-window-tokens N` to display recent request utilization and apply a conservative local context budget; use `auto` when the model limit is unknown.
 
 Question arguments can be written as multiple words; OTTO joins them with spaces:
 
@@ -177,7 +177,7 @@ Resume a session with its full ID or a unique prefix:
 otto --session 8f41a2c0 "Continue reviewing configuration loading"
 ```
 
-Sessions are workspace-local. Only one OTTO request may use a session at a time; a concurrent request is rejected with a retry message. The archive keeps the full message history. For longer sessions, OTTO generates a rolling summary and sends it alongside the most recent complete turns.
+Sessions are workspace-local. Only one OTTO request may use a session at a time; a concurrent request is rejected with a retry message. The archive keeps the full message history. For longer sessions, OTTO generates a rolling summary and sends it alongside the most recent complete turns. At the end of a request, OTTO reports provider-reported token usage on standard error; one-shot mode shows this request's totals, while session mode shows cumulative totals and the weighted cache-read ratio. Missing provider fields are shown as unavailable, not zero. Usage is stored in the session archive.
 
 Bash runs non-interactively with the workspace as its current directory, a 120-second time limit, and bounded captured output. One approval covers the complete script, including its pipelines, conditional commands, and child processes. The workspace directory is not a sandbox: Bash runs with OTTO's operating-system permissions and can access paths outside the workspace. Time and output limits do not confine side effects; a deliberately detached process may outlive the Bash call. Command output is returned to the model, so review commands that may expose sensitive data. Interactive terminal programs are not supported by the Bash tool.
 

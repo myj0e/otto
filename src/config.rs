@@ -36,6 +36,8 @@ pub struct Config {
     pub baseurl: Option<String>,
     pub apikey: Option<String>,
     pub model: String,
+    /// Optional context size for displaying recent request utilization.
+    pub context_window_tokens: Option<u64>,
 }
 
 fn parse_max_agent_rounds(raw_value: &str) -> Result<Option<usize>> {
@@ -69,6 +71,7 @@ impl Default for Config {
             baseurl: None,
             apikey: None,
             model: DEFAULT_MODEL.to_owned(),
+            context_window_tokens: None,
         }
     }
 }
@@ -159,6 +162,13 @@ pub fn load(path: &Path) -> Result<(Config, bool)> {
             "baseurl" => config.baseurl = Some(value),
             "apikey" => config.apikey = Some(value),
             "model" => config.model = value,
+            "context_window_tokens" => {
+                config.context_window_tokens = if value.is_empty() {
+                    None
+                } else {
+                    Some(parse_context_window(&value, path, line_number + 1)?)
+                };
+            }
             _ => {}
         }
     }
@@ -271,6 +281,13 @@ pub fn validate(config: &Config) -> Result<()> {
     if config.model.is_empty() {
         return Err(OttoError::Config("model 不能为空".to_owned()));
     }
+    if let Some(value) = config.context_window_tokens {
+        if !(1..=10_000_000).contains(&value) {
+            return Err(OttoError::Config(
+                "context_window_tokens 必须在 1 到 10000000 之间".to_owned(),
+            ));
+        }
+    }
     if [
         config.name.as_deref().unwrap_or_default(),
         config.baseurl.as_deref().unwrap_or_default(),
@@ -283,6 +300,24 @@ pub fn validate(config: &Config) -> Result<()> {
         return Err(OttoError::Config("配置项不能包含换行符".to_owned()));
     }
     Ok(())
+}
+
+fn parse_context_window(raw: &str, path: &Path, line_number: usize) -> Result<u64> {
+    let value = raw.parse::<u64>().map_err(|_| {
+        OttoError::Config(format!(
+            "配置文件 {} 第 {} 行 context_window_tokens 格式错误",
+            path.display(),
+            line_number
+        ))
+    })?;
+    if !(1..=10_000_000).contains(&value) {
+        return Err(OttoError::Config(format!(
+            "配置文件 {} 第 {} 行 context_window_tokens 必须在 1 到 10000000 之间",
+            path.display(),
+            line_number
+        )));
+    }
+    Ok(value)
 }
 
 fn set_private_permissions(file: &File) -> io::Result<()> {
@@ -314,11 +349,12 @@ pub fn write_private_atomic(path: &Path, content: &str) -> Result<()> {
 pub fn save_atomic(path: &Path, config: &Config) -> Result<()> {
     validate(config)?;
     let content = format!(
-        "# OTTO (One-time.Talk once) configuration\nname={}\nbaseurl={}\napikey={}\nmodel={}\n",
+        "# OTTO (One-time.Talk once) configuration\nname={}\nbaseurl={}\napikey={}\nmodel={}\ncontext_window_tokens={}\n",
         config.name.as_deref().unwrap_or_default(),
         config.baseurl.as_deref().unwrap_or_default(),
         config.apikey.as_deref().unwrap_or_default(),
-        config.model
+        config.model,
+        config.context_window_tokens.map_or_else(String::new, |value| value.to_string())
     );
     write_private_atomic(path, &content)
 }
@@ -329,12 +365,18 @@ pub fn save_values(
     baseurl: &str,
     apikey: &str,
     model: Option<&str>,
+    context_window_tokens: Option<Option<u64>>,
 ) -> Result<()> {
+    let context_window_tokens = match context_window_tokens {
+        Some(value) => value,
+        None => load(path)?.0.context_window_tokens,
+    };
     let config = Config {
         name: Some(name.to_owned()),
         baseurl: Some(baseurl.to_owned()),
         apikey: Some(apikey.to_owned()),
         model: model.unwrap_or(DEFAULT_MODEL).to_owned(),
+        context_window_tokens,
     };
     save_atomic(path, &config)
 }

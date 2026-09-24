@@ -2,13 +2,16 @@
 """Exercise the interactive configuration flow through a pseudo-terminal."""
 
 import os
+import fcntl
 import pathlib
 import pty
 import select
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import termios
 
 
 def main():
@@ -22,6 +25,7 @@ def main():
         environment.setdefault("ASAN_OPTIONS", "detect_leaks=0")
 
         master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
         process = subprocess.Popen(
             [binary, "--config"],
             stdin=slave,

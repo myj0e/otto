@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
@@ -208,6 +208,8 @@ fn normalize_no_proxy_entry(entry: &str) -> Option<String> {
 #[derive(Debug)]
 pub enum ChatEvent {
     Data(Value),
+    ResponseFinished,
+    ResponseFailed(String),
     Done,
 }
 
@@ -242,10 +244,58 @@ where
         if let Some(message) = api_error(&value) {
             return Err(OttoError::Api(message));
         }
-        ChatEvent::Data(value)
+        let finish_reason = value
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/delta/stop_reason").and_then(Value::as_str))
+            .map(str::to_owned);
+        let anthropic_stop = value.get("type").and_then(Value::as_str) == Some("message_stop");
+        callback(ChatEvent::Data(value))?;
+        if let Some(reason) = finish_reason {
+            if matches!(
+                reason.as_str(),
+                "stop" | "tool_calls" | "end_turn" | "stop_sequence" | "tool_use"
+            ) {
+                ChatEvent::ResponseFinished
+            } else {
+                ChatEvent::ResponseFailed(reason)
+            }
+        } else if anthropic_stop {
+            ChatEvent::Done
+        } else {
+            data.clear();
+            return Ok(());
+        }
     };
     data.clear();
     callback(event)
+}
+
+async fn read_bounded(response: reqwest::Response, maximum: usize) -> Result<(Vec<u8>, bool)> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::with_capacity(maximum.min(16 * 1024));
+    let mut exceeded = false;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| OttoError::Network(error.to_string()))?;
+        let available = maximum.saturating_sub(body.len());
+        let keep = chunk.len().min(available);
+        body.extend_from_slice(&chunk[..keep]);
+        if keep < chunk.len() {
+            exceeded = true;
+            break;
+        }
+    }
+    Ok((body, exceeded))
+}
+
+fn ensure_sse_finished(finished: bool) -> Result<()> {
+    if finished {
+        Ok(())
+    } else {
+        Err(OttoError::Api(
+            "SSE 响应提前结束，缺少正常结束标记".to_owned(),
+        ))
+    }
 }
 
 fn api_error(value: &Value) -> Option<String> {
@@ -332,31 +382,38 @@ where
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        let detail = if body.is_empty() {
-            format!("HTTP {}", status.as_u16())
-        } else {
-            format!("HTTP {}：{}", status.as_u16(), body)
-        };
-        return Err(OttoError::Api(detail));
-    }
-
     let maximum = if request.max_response_bytes == 0 {
         DEFAULT_MAX_RESPONSE_BYTES
     } else {
         request.max_response_bytes
     };
 
+    if !status.is_success() {
+        let (body, truncated) = read_bounded(response, 8 * 1024).await?;
+        let body = String::from_utf8_lossy(&body);
+        let detail = if body.is_empty() {
+            format!("HTTP {}", status.as_u16())
+        } else {
+            format!(
+                "HTTP {}：{}{}",
+                status.as_u16(),
+                body,
+                if truncated {
+                    "…[响应已截断]"
+                } else {
+                    ""
+                }
+            )
+        };
+        return Err(OttoError::Api(detail));
+    }
+
     if !content_type.contains("text/event-stream") {
-        let body = response
-            .text()
-            .await
-            .map_err(|error| OttoError::Network(error.to_string()))?;
-        if body.len() > maximum {
+        let (body, exceeded) = read_bounded(response, maximum).await?;
+        if exceeded {
             return Err(OttoError::Api("API 响应超过大小限制".to_owned()));
         }
-        let value: Value = serde_json::from_str(&body)?;
+        let value: Value = serde_json::from_slice(&body)?;
         if let Some(message) = api_error(&value) {
             return Err(OttoError::Api(message));
         }
@@ -371,9 +428,25 @@ where
     let mut received = 0usize;
     let finished = Arc::new(AtomicBool::new(false));
     let finished_for_dispatch = Arc::clone(&finished);
+    let response_finished = Arc::new(AtomicBool::new(false));
+    let response_finished_for_dispatch = Arc::clone(&response_finished);
+    let response_failure = Arc::new(Mutex::new(None::<String>));
+    let response_failure_for_dispatch = Arc::clone(&response_failure);
     let mut dispatch = |event: ChatEvent| {
-        if matches!(&event, ChatEvent::Done) {
-            finished_for_dispatch.store(true, Ordering::Relaxed);
+        match &event {
+            ChatEvent::Done => finished_for_dispatch.store(true, Ordering::Relaxed),
+            ChatEvent::ResponseFinished => {
+                response_finished_for_dispatch.store(true, Ordering::Relaxed)
+            }
+            ChatEvent::ResponseFailed(reason) => {
+                response_finished_for_dispatch.store(true, Ordering::Relaxed);
+                *response_failure_for_dispatch
+                    .lock()
+                    .map_err(|_| OttoError::Api("无法保存模型流结束状态".to_owned()))? =
+                    Some(reason.clone());
+                return Ok(());
+            }
+            ChatEvent::Data(_) => {}
         }
         on_event(event)
     };
@@ -397,20 +470,32 @@ where
         }
     }
 
-    if !pending.is_empty() {
+    if !finished.load(Ordering::Relaxed) && !pending.is_empty() {
         process_line(&pending, &mut event_data, &mut dispatch)?;
     }
-    if !event_data.is_empty() {
+    if !finished.load(Ordering::Relaxed) && !event_data.is_empty() {
         dispatch_event(&mut event_data, &mut dispatch)?;
     }
 
+    if !finished.load(Ordering::Relaxed) && response_finished.load(Ordering::Relaxed) {
+        dispatch(ChatEvent::Done)?;
+    }
+    ensure_sse_finished(finished.load(Ordering::Relaxed))?;
+    if let Some(reason) = response_failure
+        .lock()
+        .map_err(|_| OttoError::Api("无法读取模型流结束状态".to_owned()))?
+        .clone()
+    {
+        return Err(OttoError::Api(format!("模型未正常完成响应：{reason}")));
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        event_content, normalize_no_proxy, parse_gsettings_scalar, process_line, ChatEvent,
+        dispatch_event, ensure_sse_finished, event_content, normalize_no_proxy,
+        parse_gsettings_scalar, process_line, ChatEvent,
     };
 
     #[test]
@@ -449,6 +534,8 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0] {
             ChatEvent::Data(value) => assert_eq!(event_content(value), Some("hi")),
+            ChatEvent::ResponseFinished => panic!("expected data event"),
+            ChatEvent::ResponseFailed(_) => panic!("expected data event"),
             ChatEvent::Done => panic!("expected data event"),
         }
     }
@@ -466,5 +553,41 @@ mod tests {
         })
         .expect("event boundary");
         assert!(done);
+    }
+
+    #[test]
+    fn requires_a_terminal_sse_marker() {
+        assert!(ensure_sse_finished(false).is_err());
+        assert!(ensure_sse_finished(true).is_ok());
+    }
+
+    #[test]
+    fn rejects_truncated_model_output() {
+        let mut data = r#"{"choices":[{"finish_reason":"length"}]}"#.to_owned();
+        let mut failed = false;
+        dispatch_event(&mut data, &mut |event| {
+            if matches!(event, ChatEvent::ResponseFailed(_)) {
+                failed = true;
+            }
+            Ok(())
+        })
+        .expect("usage may still follow the failure marker");
+        assert!(failed);
+    }
+
+    #[test]
+    fn accepts_anthropic_tool_use_as_normal_completion() {
+        let mut data = r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#.to_owned();
+        let mut events = Vec::new();
+        dispatch_event(&mut data, &mut |event| {
+            events.push(event);
+            Ok(())
+        })
+        .expect("tool_use is a completed model turn");
+
+        assert!(matches!(
+            events.as_slice(),
+            [ChatEvent::Data(_), ChatEvent::ResponseFinished]
+        ));
     }
 }

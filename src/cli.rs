@@ -22,6 +22,7 @@ pub struct CliOptions {
     pub baseurl: Option<String>,
     pub apikey: Option<String>,
     pub model: Option<String>,
+    pub context_window_tokens: Option<Option<u64>>,
     pub has_config_options: bool,
     pub root: Option<PathBuf>,
     pub no_agent: bool,
@@ -42,6 +43,7 @@ impl Default for CliOptions {
             baseurl: None,
             apikey: None,
             model: None,
+            context_window_tokens: None,
             has_config_options: false,
             root: None,
             no_agent: false,
@@ -118,6 +120,22 @@ fn parse_config(arguments: &[String]) -> Result<CliOptions> {
             options.apikey = Some(value);
         } else if let Some(value) = take_option_value(arguments, &mut index, &["--model", "-M"])? {
             options.model = Some(value);
+        } else if let Some(value) =
+            take_option_value(arguments, &mut index, &["--context-window-tokens"])?
+        {
+            options.context_window_tokens = Some(if value.eq_ignore_ascii_case("auto") {
+                None
+            } else {
+                let value = value.parse::<u64>().map_err(|_| {
+                    usage_error("--context-window-tokens 必须是 1 到 10000000 之间的整数或 auto")
+                })?;
+                if !(1..=10_000_000).contains(&value) {
+                    return Err(usage_error(
+                        "--context-window-tokens 必须是 1 到 10000000 之间的整数或 auto",
+                    ));
+                }
+                Some(value)
+            });
         } else {
             return Err(usage_error(format!("未知配置选项：{}", arguments[index])));
         }
@@ -337,7 +355,7 @@ pub fn print_help() {
     println!("  otto -S <question...>");
     println!("  otto --config");
     println!("  otto -c");
-    println!("  otto --config --name ... --baseurl ... --apikey ... [--model ...]");
+    println!("  otto --config --name ... --baseurl ... --apikey ... [--model ...] [--context-window-tokens <n|auto>]");
     println!("  otto --help");
     println!("  otto --version");
     println!();
@@ -348,6 +366,7 @@ pub fn print_help() {
     println!("  -b, --baseurl      Configure the service Base URL");
     println!("  -k, --apikey       Configure the API key");
     println!("  -M, --model        Configure the model name");
+    println!("      --context-window-tokens  Set the context window size for usage display");
     println!("  -r, --root         Set the workspace root");
     println!("      --new-session  Start and save a new conversation session");
     println!("      --session      Resume a session, or list sessions without an ID");

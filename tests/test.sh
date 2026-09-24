@@ -92,6 +92,20 @@ rg -q -- '--- OTTO STDIN ---' "$capture_file"
 rg -q -- 'alpha.txt' "$capture_file"
 rg -q -- 'beta.txt' "$capture_file"
 
+session_workspace="$temporary_directory/session-workspace"
+mkdir -p "$session_workspace"
+session_answer=$(env \
+    HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
+    http_proxy= https_proxy= all_proxy= \
+    NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+    OTTO_CONFIG="$config_file" "$binary" --root "$session_workspace" \
+    --new-session --no-agent 'session stdout test' \
+    2>"$temporary_directory/session-stderr")
+test "$session_answer" = 'mock: session stdout test'
+rg -q '会话已保存' "$temporary_directory/session-stderr"
+session_list=$("$binary" --root "$session_workspace" --session-list)
+printf '%s\n' "$session_list" | rg -q 'session stdout test'
+
 no_stdin_answer=$(printf 'this-must-not-be-forwarded' | env \
     HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
     http_proxy= https_proxy= all_proxy= \

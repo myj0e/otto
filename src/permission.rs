@@ -24,6 +24,17 @@ impl PermissionManager {
         mode: Option<&str>,
         action: &str,
     ) -> Result<()> {
+        self.authorize_with_preview(tool_name, capability, mode, action, None)
+    }
+
+    pub fn authorize_with_preview(
+        &mut self,
+        tool_name: &str,
+        capability: Capability,
+        mode: Option<&str>,
+        action: &str,
+        preview: Option<&str>,
+    ) -> Result<()> {
         let tool_name = tool_name.to_ascii_lowercase();
         if capability == Capability::Read
             && DEFAULT_ALLOWED_READ_TOOLS.contains(&tool_name.as_str())
@@ -34,7 +45,13 @@ impl PermissionManager {
             return Ok(());
         }
 
-        let choice = ui::select_authorization(&tool_name, capability.label(), mode, action)?;
+        let choice = ui::select_authorization_with_preview(
+            &tool_name,
+            capability.label(),
+            mode,
+            action,
+            preview,
+        )?;
         match choice {
             AuthorizationChoice::Once => Ok(()),
             AuthorizationChoice::AlwaysForTool => {

@@ -8,6 +8,8 @@ use crossterm::terminal::{self, Clear, ClearType};
 use crossterm::{execute, queue};
 
 use crate::error::{OttoError, Result};
+use crate::usage::TokenUsage;
+use unicode_width::UnicodeWidthChar;
 
 const ACTION_MAX_CHARS: usize = 4_096;
 const BASH_REASON_MAX_CHARS: usize = 800;
@@ -18,7 +20,6 @@ const NOTE_MAX_CHARS: usize = 4_000;
 // Keep structural colors in one restrained ANSI palette so panels read as
 // distinct sections without overpowering their contents.
 const COLOR_BRAND: Color = Color::AnsiValue(109); // muted teal
-const COLOR_EXECUTION: Color = Color::AnsiValue(139); // dusty purple
 const COLOR_TOOL_ACTIVITY: Color = Color::AnsiValue(103); // slate blue
 const COLOR_FINAL_ANSWER: Color = Color::AnsiValue(108); // sage green
 const COLOR_AUTHORIZATION: Color = Color::AnsiValue(144); // soft ochre
@@ -49,6 +50,17 @@ const AUTHORIZATION_OPTIONS: [MenuOption<'static>; 3] = [
     },
     MenuOption {
         label: "不允许执行",
+        shortcuts: &['n', 'N'],
+    },
+];
+
+const WRITE_AUTHORIZATION_OPTIONS: [MenuOption<'static>; 2] = [
+    MenuOption {
+        label: "允许本次变更",
+        shortcuts: &['y', 'Y'],
+    },
+    MenuOption {
+        label: "拒绝变更",
         shortcuts: &['n', 'N'],
     },
 ];
@@ -116,49 +128,27 @@ pub fn print_tool_summary(names: &[String]) {
         styled,
     );
     let _ = write_muted_line(&mut writer, &summary, width, styled);
-    let _ = write_panel_footer(&mut writer, width, COLOR_TOOL_ACTIVITY, styled);
-    let _ = writer.flush();
-}
 
-/// Render the assistant's short pre-tool note separately from both tool
-/// activity and the final answer. This is user-facing progress, not reasoning.
-pub fn print_execution_note(note: &str) {
-    let note = sanitize_inline(note, NOTE_MAX_CHARS);
-    if note.is_empty() {
-        return;
-    }
-
-    let stderr = io::stderr();
-    let interactive = stderr.is_terminal();
-    let mut writer = stderr.lock();
-    let width = terminal_width(interactive);
-    if interactive {
-        let styled = colors_enabled();
-        let _ = write_panel_title(
-            &mut writer,
-            "执行说明",
-            width,
-            true,
-            COLOR_EXECUTION,
-            styled,
-        );
-        let _ = write_muted_line(&mut writer, &note, width, styled);
-        let _ = write_panel_footer(&mut writer, width, COLOR_EXECUTION, styled);
-    } else {
-        let _ = writeln!(writer, "[otto] 执行说明：{note}");
-    }
     let _ = writer.flush();
 }
 
 /// Add a compact header before a streamed, tool-free response.
 pub fn begin_final_answer() -> io::Result<bool> {
+    begin_answer_panel("OTTO · 最终答复")
+}
+
+pub fn begin_response_stream() -> io::Result<bool> {
+    begin_answer_panel("OTTO · 响应")
+}
+
+fn begin_answer_panel(title: &str) -> io::Result<bool> {
     let stdout = io::stdout();
     let interactive = stdout.is_terminal();
     if interactive {
         let mut writer = stdout.lock();
         write_panel_title(
             &mut writer,
-            "OTTO · 最终答复",
+            title,
             terminal_width(true),
             false,
             COLOR_FINAL_ANSWER,
@@ -171,6 +161,14 @@ pub fn begin_final_answer() -> io::Result<bool> {
 
 /// Close the response section opened by [`begin_final_answer`].
 pub fn end_final_answer(interactive: bool) -> io::Result<()> {
+    end_answer_panel(interactive)
+}
+
+pub fn end_response_stream(interactive: bool) -> io::Result<()> {
+    end_answer_panel(interactive)
+}
+
+fn end_answer_panel(interactive: bool) -> io::Result<()> {
     if !interactive {
         return Ok(());
     }
@@ -235,6 +233,121 @@ pub fn print_status(message: &str) {
     let _ = writer.flush();
 }
 
+/// Report request progress and session state without contaminating answer stdout.
+pub fn print_notice(message: &str) {
+    let stderr = io::stderr();
+    let interactive = stderr.is_terminal();
+    let mut writer = stderr.lock();
+    let message = sanitize_inline(message, NOTE_MAX_CHARS);
+    if interactive && colors_enabled() {
+        let _ = queue!(
+            writer,
+            SetForegroundColor(COLOR_BRAND),
+            crossterm::style::Print("◆ "),
+            ResetColor,
+            crossterm::style::Print(message),
+            crossterm::style::Print("\r\n")
+        );
+    } else {
+        let _ = writeln!(writer, "{message}");
+    }
+    let _ = writer.flush();
+}
+
+fn grouped_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut output = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            output.push(',');
+        }
+        output.push(character);
+    }
+    output
+}
+
+/// Print provider-reported token usage on stderr so scripts that consume the
+/// answer from stdout keep a clean response stream.
+pub fn print_usage(usage: &TokenUsage, session: bool, context_window: Option<u64>) {
+    let input = if usage.input_reports == 0 {
+        "—".to_owned()
+    } else {
+        grouped_count(usage.input_tokens)
+    };
+    let output = if usage.output_reports == 0 {
+        "—".to_owned()
+    } else {
+        grouped_count(usage.output_tokens)
+    };
+    let cache = match usage.cache_hit_percent() {
+        Some(percent) => format!(
+            "{percent}% ({}/{})",
+            grouped_count(usage.cache_read_input_tokens),
+            grouped_count(usage.cache_read_total_input_tokens)
+        ),
+        None if usage.requests_with_cache_usage > 0 => "命中数未提供".to_owned(),
+        None => "不可用".to_owned(),
+    };
+    let cache_coverage = if usage.requests_with_cache_usage < usage.requests_with_usage {
+        format!(
+            " · 缓存数据 {}/{} 次用量请求",
+            usage.requests_with_cache_usage, usage.requests_with_usage
+        )
+    } else {
+        String::new()
+    };
+    let cache_write = if usage.cache_write_input_tokens > 0 {
+        format!(
+            " · 缓存写入 {}",
+            grouped_count(usage.cache_write_input_tokens)
+        )
+    } else {
+        String::new()
+    };
+    let coverage = if usage.requests_with_usage < usage.requests {
+        format!(
+            " · 用量数据 {}/{} 次请求",
+            usage.requests_with_usage, usage.requests
+        )
+    } else {
+        String::new()
+    };
+    let field_coverage = if usage.input_reports < usage.requests_with_usage
+        || usage.output_reports < usage.requests_with_usage
+    {
+        format!(
+            " · 输入/输出字段 {}/{}、{}/{}",
+            usage.input_reports,
+            usage.requests_with_usage,
+            usage.output_reports,
+            usage.requests_with_usage
+        )
+    } else {
+        String::new()
+    };
+    let context = match (usage.latest_input_tokens, context_window) {
+        (Some(input), Some(maximum)) => {
+            let tenths = input
+                .saturating_mul(1000)
+                .checked_div(maximum)
+                .unwrap_or_default();
+            format!(
+                " · 最近请求上下文 {}/{} ({:.1}%)",
+                grouped_count(input),
+                grouped_count(maximum),
+                tenths as f64 / 10.0
+            )
+        }
+        (Some(input), None) => format!(" · 最近请求输入 {}", grouped_count(input)),
+        _ => String::new(),
+    };
+    print_notice(&format!(
+        "Token 用量 · {}输入 {input} · 输出 {output} · 缓存命中 {cache}{cache_write}{cache_coverage} · {} 次请求{coverage}{field_coverage}{context}",
+        if session { "会话累计" } else { "本轮" },
+        usage.requests
+    ));
+}
+
 pub fn print_screen_header(title: &str, subtitle: &str) {
     let stdout = io::stdout();
     let interactive = stdout.is_terminal();
@@ -260,6 +373,57 @@ pub fn print_summary(title: &str, fields: &[(&str, &str)]) {
     }
     let _ = write_panel_footer(&mut writer, width, COLOR_BRAND, styled);
     let _ = writer.flush();
+}
+
+/// Keep redirected session listings stable; use stacked rows in the terminal so
+/// long descriptions never compete with the identifier for horizontal space.
+pub fn print_sessions(records: &[crate::sessions::SessionRecord]) -> io::Result<()> {
+    let stdout = io::stdout();
+    let interactive = stdout.is_terminal();
+    let mut writer = stdout.lock();
+    if records.is_empty() {
+        writeln!(writer, "当前 workspace 没有已保存的会话。")?;
+    } else if !interactive {
+        writeln!(
+            writer,
+            "SESSION ID                              DESCRIPTION"
+        )?;
+        for record in records {
+            writeln!(
+                writer,
+                "{}  {}",
+                record.id,
+                sanitize_terminal_output(&record.description)
+            )?;
+        }
+    } else {
+        let width = terminal_width(true);
+        let styled = colors_enabled();
+        write_panel_title(
+            &mut writer,
+            &format!("OTTO · 会话 · {} 条", records.len()),
+            width,
+            false,
+            COLOR_BRAND,
+            styled,
+        )?;
+        for record in records {
+            write_section_label(&mut writer, &record.id, width, COLOR_BRAND, styled)?;
+            let description = sanitize_inline(&record.description, NOTE_MAX_CHARS);
+            write_muted_line(
+                &mut writer,
+                if description.is_empty() {
+                    "暂无描述"
+                } else {
+                    &description
+                },
+                width,
+                styled,
+            )?;
+        }
+        writer.write_all(b"\r\n")?;
+    }
+    writer.flush()
 }
 
 pub fn write_input_prompt(label: &str, default: Option<&str>) -> io::Result<()> {
@@ -326,7 +490,10 @@ impl ModelProgress {
             return Self { active: false };
         }
         let mut writer = stderr.lock();
-        let label = sanitize_inline(label, 120);
+        let label = truncate_terminal_line(
+            &sanitize_inline(label, 120),
+            terminal_width(true).saturating_sub(9),
+        );
         if colors_enabled() {
             let _ = queue!(
                 writer,
@@ -361,11 +528,12 @@ impl Drop for ModelProgress {
     }
 }
 
-pub fn select_authorization(
+pub fn select_authorization_with_preview(
     tool_name: &str,
     capability_label: &str,
     mode: Option<&str>,
     action: &str,
+    preview: Option<&str>,
 ) -> Result<AuthorizationChoice> {
     let mut session = TerminalSession::new()?;
     let action = sanitize_inline(action, ACTION_MAX_CHARS);
@@ -408,17 +576,68 @@ pub fn select_authorization(
         styled,
     )
     .map_err(permission_io_error)?;
+    if let Some(preview) = preview.filter(|value| !value.is_empty()) {
+        write_section_label(
+            &mut session.writer,
+            "变更预览 · 尚未写入",
+            width,
+            COLOR_AUTHORIZATION,
+            styled,
+        )
+        .map_err(permission_io_error)?;
+        for line in sanitize_multiline(preview).lines() {
+            let color = if line.starts_with('+') {
+                COLOR_FINAL_ANSWER
+            } else if line.starts_with('-') {
+                COLOR_ERROR
+            } else {
+                COLOR_BODY
+            };
+            for part in wrap_terminal_text(line, width.saturating_sub(6).max(2)) {
+                if styled {
+                    queue!(
+                        session.writer,
+                        SetForegroundColor(COLOR_MUTED),
+                        crossterm::style::Print("  │ "),
+                        SetForegroundColor(color),
+                        crossterm::style::Print(part),
+                        ResetColor
+                    )
+                    .map_err(permission_io_error)?;
+                } else {
+                    write!(session.writer, "  │ {part}").map_err(permission_io_error)?;
+                }
+                session
+                    .writer
+                    .write_all(b"\r\n")
+                    .map_err(permission_io_error)?;
+            }
+        }
+    }
+    let options = if capability_label == "写入" {
+        &WRITE_AUTHORIZATION_OPTIONS[..]
+    } else {
+        &AUTHORIZATION_OPTIONS[..]
+    };
     let selected = select_menu(
         &mut session.writer,
-        &AUTHORIZATION_OPTIONS,
+        options,
         0,
-        2,
+        options.len() - 1,
         "授权选择",
         COLOR_AUTHORIZATION,
     )?;
     write_panel_footer(&mut session.writer, width, COLOR_AUTHORIZATION, styled)
         .map_err(permission_io_error)?;
-    Ok(choice_for(selected))
+    if capability_label == "写入" {
+        Ok(if selected == 0 {
+            AuthorizationChoice::Once
+        } else {
+            AuthorizationChoice::Deny
+        })
+    } else {
+        Ok(choice_for(selected))
+    }
 }
 
 /// Show the exact Bash script and require a fresh, per-invocation decision.
@@ -549,7 +768,7 @@ pub fn select_bash_authorization(
 fn terminal_width(interactive: bool) -> usize {
     if interactive {
         terminal::size()
-            .map(|(width, _)| usize::from(width.saturating_sub(1).max(1)))
+            .map(|(width, _)| usize::from(width.saturating_sub(1).max(1)).min(100))
             .unwrap_or(80)
     } else {
         80
@@ -562,10 +781,10 @@ fn colors_enabled() -> bool {
 }
 
 fn panel_heading(title: &str, width: usize) -> String {
-    let prefix = format!("╭─ {} ", sanitize_inline(title, 120));
+    let prefix = format!("── {} ", sanitize_inline(title, 120));
     let prefix_width = terminal_text_width(&prefix);
     if prefix_width + 1 <= width {
-        format!("{prefix}{}╮", "─".repeat(width - prefix_width - 1))
+        format!("{prefix}{}", "─".repeat(width - prefix_width))
     } else {
         truncate_terminal_line(&prefix, width)
     }
@@ -604,8 +823,7 @@ fn write_panel_footer<W: Write>(
     accent: Color,
     styled: bool,
 ) -> io::Result<()> {
-    let width = width.max(2);
-    let footer = format!("╰{}", "─".repeat(width - 1));
+    let footer = "─".repeat(width.min(24));
     if styled {
         queue!(
             writer,
@@ -627,7 +845,16 @@ fn write_panel_field<W: Write>(
     width: usize,
     styled: bool,
 ) -> io::Result<()> {
-    let prefix = format!("  {label}: ");
+    let label = truncate_terminal_line(
+        &sanitize_inline(label, 120),
+        terminal_width(true).saturating_sub(9),
+    );
+    let padding = if width >= 40 {
+        10usize.saturating_sub(terminal_text_width(&label))
+    } else {
+        0
+    };
+    let prefix = format!("  {label}{}  ", " ".repeat(padding));
     let prefix_width = terminal_text_width(&prefix);
     let value_width = width.saturating_sub(prefix_width).max(2);
     let continuation = " ".repeat(prefix_width);
@@ -791,9 +1018,9 @@ fn select_menu<W: Write>(
             "终端高度不足以显示授权选项，已拒绝本地工具操作".to_owned(),
         ));
     }
-    let line_width = usize::from(terminal_width.saturating_sub(1).max(1));
-    let visible_count = usize::from(terminal_height - 1).min(MENU_MAX_VISIBLE_OPTIONS);
-    let rendered_rows = options.len().min(visible_count);
+    let mut line_width = usize::from(terminal_width.saturating_sub(1).max(1));
+    let mut visible_count = usize::from(terminal_height - 1).min(MENU_MAX_VISIBLE_OPTIONS);
+    let mut rendered_rows = options.len().min(visible_count);
     render_menu(
         writer,
         options,
@@ -810,9 +1037,51 @@ fn select_menu<W: Write>(
 
     loop {
         let event = event::read().map_err(permission_io_error)?;
+        if let Event::Resize(new_width, new_height) = event {
+            if new_height < 2 {
+                return Err(OttoError::Permission(
+                    "终端缩放后高度不足，已取消授权并拒绝本地工具操作".to_owned(),
+                ));
+            }
+            let old_options = option_lines(options, selected, visible_count, line_width);
+            let old_prompt = menu_prompt(prompt, selected, options.len(), line_width);
+            let columns = usize::from(new_width.max(1));
+            let wrapped_rows = old_options
+                .iter()
+                .map(|line| rows_at_width(line, columns))
+                .sum::<usize>()
+                .saturating_add(rows_at_width(&old_prompt, columns).saturating_sub(1));
+            queue!(
+                writer,
+                MoveUp(wrapped_rows.min(u16::MAX as usize) as u16),
+                MoveToColumn(0),
+                Clear(ClearType::FromCursorDown)
+            )
+            .map_err(permission_io_error)?;
+            line_width = usize::from(new_width.saturating_sub(1).max(1));
+            visible_count = usize::from(new_height - 1).min(MENU_MAX_VISIBLE_OPTIONS);
+            rendered_rows = options.len().min(visible_count);
+            render_menu(
+                writer,
+                options,
+                selected,
+                prompt,
+                line_width,
+                visible_count,
+                None,
+                0,
+                false,
+                accent,
+            )
+            .map_err(permission_io_error)?;
+            continue;
+        }
         let Event::Key(key) = event else {
             continue;
         };
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            continue;
+        }
 
         if key.code == KeyCode::Esc
             || (key.modifiers.contains(KeyModifiers::CONTROL)
@@ -852,8 +1121,10 @@ fn select_menu<W: Write>(
         }
 
         let next = match key.code {
-            KeyCode::Up => Some(selected.saturating_sub(1)),
-            KeyCode::Down => Some((selected + 1).min(options.len() - 1)),
+            KeyCode::Home => Some(0),
+            KeyCode::End => Some(options.len() - 1),
+            KeyCode::Up | KeyCode::BackTab => Some(selected.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Tab => Some((selected + 1).min(options.len() - 1)),
             KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
                 render_menu(
                     writer,
@@ -892,6 +1163,11 @@ fn select_menu<W: Write>(
     }
 }
 
+fn rows_at_width(text: &str, columns: usize) -> usize {
+    let width = terminal_text_width(text);
+    width.max(1).saturating_add(columns.max(1) - 1) / columns.max(1)
+}
+
 fn choice_index_for_key(code: KeyCode, options: &[MenuOption<'_>]) -> Option<usize> {
     let KeyCode::Char(character) = code else {
         return None;
@@ -915,14 +1191,16 @@ fn choice_index_for_key(code: KeyCode, options: &[MenuOption<'_>]) -> Option<usi
 }
 
 fn menu_prompt(prompt: &str, selected: usize, option_count: usize, line_width: usize) -> String {
-    truncate_terminal_line(
-        &format!(
-            "↑↓ 移动 · Enter 确认 · Esc 取消  ·  {}/{} · {prompt}",
+    let hint = if line_width < 48 {
+        "↑↓ 选择 · Enter 确认 · Esc 取消".to_owned()
+    } else {
+        format!(
+            "↑↓ 选择 · Enter 确认 · 数字 / 字母快捷选择 · Esc 取消  {}/{} · {prompt}",
             selected + 1,
             option_count
-        ),
-        line_width,
-    )
+        )
+    };
+    truncate_terminal_line(&hint, line_width)
 }
 
 fn render_menu<W: Write>(
@@ -953,7 +1231,7 @@ fn render_menu<W: Write>(
         }
     }
     let prompt_line = if let Some(index) = confirmed {
-        truncate_terminal_line(&format!("{prompt} · 已选择 {}", index + 1), line_width)
+        truncate_terminal_line(&format!("{prompt} · {}", options[index].label), line_width)
     } else {
         prompt_line
     };
@@ -979,6 +1257,7 @@ fn write_menu_option<W: Write>(writer: &mut W, option: &str, accent: Color) -> i
             writer,
             SetForegroundColor(accent),
             SetAttribute(Attribute::Bold),
+            SetAttribute(Attribute::Reverse),
             crossterm::style::Print(option),
             SetAttribute(Attribute::Reset),
             ResetColor
@@ -1003,7 +1282,7 @@ fn truncate_terminal_line(value: &str, maximum_width: usize) -> String {
     let mut truncated = false;
 
     for character in value.chars() {
-        let character_width = if character.is_ascii() { 1 } else { 2 };
+        let character_width = character.width().unwrap_or(0);
         if width + character_width > maximum_width {
             truncated = true;
             break;
@@ -1014,11 +1293,11 @@ fn truncate_terminal_line(value: &str, maximum_width: usize) -> String {
 
     if truncated {
         if maximum_width >= 2 {
-            while width + 2 > maximum_width {
+            while width + 1 > maximum_width {
                 let Some(last) = output.pop() else {
                     break;
                 };
-                width -= if last.is_ascii() { 1 } else { 2 };
+                width -= last.width().unwrap_or(0);
             }
             output.push('…');
         } else if output.is_empty() {
@@ -1113,7 +1392,7 @@ fn write_bash_command_line<W: Write>(
 
 fn terminal_text_width(text: &str) -> usize {
     text.chars()
-        .map(|character| if character.is_ascii() { 1 } else { 2 })
+        .map(|character| character.width().unwrap_or(0))
         .sum()
 }
 
@@ -1124,7 +1403,12 @@ fn wrap_terminal_text(text: &str, maximum_width: usize) -> Vec<String> {
     let mut width = 0usize;
 
     for character in text.chars() {
-        let character_width = if character.is_ascii() { 1 } else { 2 };
+        if character == '\n' {
+            lines.push(std::mem::take(&mut line));
+            width = 0;
+            continue;
+        }
+        let character_width = character.width().unwrap_or(0);
         if !line.is_empty() && width + character_width > maximum_width {
             lines.push(std::mem::take(&mut line));
             width = 0;
@@ -1203,7 +1487,39 @@ impl Drop for TerminalSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{authorization_opening, option_lines, sanitize_inline, AUTHORIZATION_OPTIONS};
+    use super::{
+        authorization_opening, option_lines, rows_at_width, sanitize_inline, AUTHORIZATION_OPTIONS,
+        WRITE_AUTHORIZATION_OPTIONS,
+    };
+
+    #[test]
+    fn wraps_by_display_columns_and_preserves_line_breaks() {
+        assert_eq!(super::terminal_text_width("中文 · e\u{301}"), 8);
+        assert_eq!(super::wrap_terminal_text("中文ab", 4), vec!["中文", "ab"]);
+        assert_eq!(
+            super::wrap_terminal_text("one\ntwo", 20),
+            vec!["one", "two"]
+        );
+        assert_eq!(
+            super::wrap_terminal_text("e\u{301}ab", 2),
+            vec!["e\u{301}a", "b"]
+        );
+    }
+
+    #[test]
+    fn truncation_and_headings_fit_available_columns() {
+        for width in 1..100 {
+            assert!(
+                super::terminal_text_width(&super::truncate_terminal_line(
+                    "中文 · hello world",
+                    width
+                )) <= width
+            );
+            assert!(
+                super::terminal_text_width(&super::panel_heading("OTTO · 配置", width)) <= width
+            );
+        }
+    }
 
     #[test]
     fn renders_three_separate_options() {
@@ -1213,6 +1529,20 @@ mod tests {
         assert!(lines[1].contains("允许该工具后续的所有执行"));
         assert!(lines[2].contains("不允许执行"));
         assert!(lines[1].starts_with('>'));
+    }
+
+    #[test]
+    fn resize_row_count_uses_display_columns() {
+        assert_eq!(rows_at_width("中文标题", 4), 2);
+        assert_eq!(rows_at_width("中文标题", 80), 1);
+    }
+
+    #[test]
+    fn write_authorization_requires_a_fresh_decision_for_each_preview() {
+        assert_eq!(WRITE_AUTHORIZATION_OPTIONS.len(), 2);
+        assert!(WRITE_AUTHORIZATION_OPTIONS
+            .iter()
+            .all(|option| !option.label.contains("后续")));
     }
 
     #[test]

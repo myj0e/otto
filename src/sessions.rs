@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,11 +8,14 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 use crate::error::{OttoError, Result};
+use crate::usage::TokenUsage;
 use crate::workspace::Workspace;
 
 const SESSION_DIRECTORY: &str = "sessions";
 const SESSION_SCHEMA_VERSION: u32 = 1;
 const MAX_SESSION_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SESSION_LIST_ENTRIES: usize = 5_000;
+const MAX_SESSION_LIST_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -26,6 +29,12 @@ pub struct SessionRecord {
     pub context_summary: String,
     #[serde(default)]
     pub summarized_messages: usize,
+    /// Message boundary known to belong to the last closed turn. `None` means
+    /// a legacy archive in which all stored messages predate checkpoints.
+    #[serde(default)]
+    pub completed_messages: Option<usize>,
+    #[serde(default)]
+    pub usage: TokenUsage,
 }
 
 pub struct SessionLease {
@@ -35,6 +44,38 @@ pub struct SessionLease {
 }
 
 impl SessionLease {
+    fn update_turn_messages(
+        &mut self,
+        completed_history: &[Value],
+        current_turn: &[Value],
+        completed: bool,
+    ) -> Result<()> {
+        let base = completed_history.len();
+        if self.record.messages.len() < base || self.record.messages[..base] != *completed_history {
+            return Err(storage_error("会话检查点与已保存历史不一致"));
+        }
+        self.record.messages.truncate(base);
+        self.record.messages.extend_from_slice(current_turn);
+        if completed {
+            self.record.completed_messages = Some(self.record.messages.len());
+        }
+        Ok(())
+    }
+
+    pub fn checkpoint_turn_with_usage(
+        &mut self,
+        completed_history: &[Value],
+        current_turn: &[Value],
+        completed: bool,
+        usage: &TokenUsage,
+        usage_before_turn: &TokenUsage,
+    ) -> Result<()> {
+        self.update_turn_messages(completed_history, current_turn, completed)?;
+        self.record.usage = usage_before_turn.clone();
+        self.record.usage.add_assign(usage);
+        self.commit()
+    }
+
     pub fn commit(&mut self) -> Result<()> {
         validate_record(&self.record)?;
         self.record.updated_at = now();
@@ -44,36 +85,112 @@ impl SessionLease {
     }
 }
 
+impl SessionRecord {
+    pub fn completed_message_count(&self) -> usize {
+        self.completed_messages
+            .unwrap_or(self.messages.len())
+            .min(self.messages.len())
+    }
+}
+
 pub fn list(workspace: &Workspace) -> Result<Vec<SessionRecord>> {
     let Some(directory) = existing_session_directory(workspace)? else {
         return Ok(Vec::new());
     };
 
     let mut records = Vec::new();
+    let mut scanned_bytes = 0u64;
+    let mut inspected_entries = 0usize;
     for entry in fs::read_dir(&directory)? {
+        if inspected_entries >= MAX_SESSION_LIST_ENTRIES || scanned_bytes >= MAX_SESSION_LIST_BYTES
+        {
+            eprintln!("会话列表达到扫描上限，已停止读取其余存档。");
+            break;
+        }
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)?;
+        inspected_entries += 1;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!("会话存档无法检查，已跳过：{error}");
+                continue;
+            }
+        };
         if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(storage_error(&format!(
-                "会话存档不是普通文件：{}",
-                path.display()
-            )));
+            eprintln!("会话存档不是普通文件，已跳过：{}", safe_file_name(&path));
+            continue;
         }
-        let record = read_record(&path)?;
+        if metadata.len() > MAX_SESSION_FILE_BYTES
+            || scanned_bytes.saturating_add(metadata.len()) > MAX_SESSION_LIST_BYTES
+        {
+            eprintln!(
+                "会话存档超过列表读取预算，已跳过：{}",
+                safe_file_name(&path)
+            );
+            continue;
+        }
+        scanned_bytes = scanned_bytes.saturating_add(metadata.len());
+        let record: SessionListRecord =
+            match serde_json::from_reader(BufReader::new(File::open(&path)?)) {
+                Ok(record) => record,
+                Err(error) => {
+                    eprintln!("会话存档损坏，已跳过：{}（{error}）", safe_file_name(&path));
+                    continue;
+                }
+            };
+        if record.schema_version != SESSION_SCHEMA_VERSION
+            || !is_uuid(&record.id)
+            || record.description.trim().is_empty()
+        {
+            eprintln!("会话存档元数据无效，已跳过：{}", safe_file_name(&path));
+            continue;
+        }
         if path.file_stem().and_then(|stem| stem.to_str()) != Some(record.id.as_str()) {
-            return Err(storage_error(&format!(
-                "会话文件名与其 ID 不匹配：{}",
-                path.display()
-            )));
+            eprintln!("会话文件名与 ID 不匹配，已跳过：{}", safe_file_name(&path));
+            continue;
         }
-        records.push(record);
+        records.push(SessionRecord {
+            schema_version: record.schema_version,
+            id: record.id,
+            description: record.description,
+            created_at: 0,
+            updated_at: record.updated_at,
+            messages: Vec::new(),
+            context_summary: String::new(),
+            summarized_messages: 0,
+            completed_messages: None,
+            usage: TokenUsage::default(),
+        });
     }
     records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     Ok(records)
+}
+
+#[derive(Deserialize)]
+struct SessionListRecord {
+    schema_version: u32,
+    id: String,
+    description: String,
+    updated_at: u64,
+}
+
+fn safe_file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 pub fn start(workspace: &Workspace) -> Result<SessionLease> {
@@ -98,6 +215,8 @@ pub fn start(workspace: &Workspace) -> Result<SessionLease> {
                 messages: Vec::new(),
                 context_summary: String::new(),
                 summarized_messages: 0,
+                completed_messages: Some(0),
+                usage: TokenUsage::default(),
             },
         });
     }
@@ -174,6 +293,53 @@ pub fn summary_boundary(messages: &[Value], maximum_recent_messages: usize) -> u
         // Summarize it whole instead of leaving it permanently outside both
         // the summary and the bounded recent context.
         .unwrap_or(messages.len())
+}
+
+/// Pick a complete-turn boundary that respects both a message cap and a
+/// conservative serialized-size token estimate. A single oversized latest
+/// turn is summarized as a whole rather than left outside the rolling memory.
+pub fn summary_boundary_for_budget(
+    messages: &[Value],
+    maximum_recent_messages: usize,
+    maximum_recent_tokens: usize,
+) -> usize {
+    let Some(mut boundary) = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    else {
+        return 0;
+    };
+    let mut recent_tokens = estimated_tokens(&messages[boundary..]);
+    if recent_tokens > maximum_recent_tokens
+        || messages.len().saturating_sub(boundary) > maximum_recent_messages
+    {
+        return messages.len();
+    }
+    loop {
+        let Some(previous_user) = messages[..boundary]
+            .iter()
+            .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        else {
+            return 0;
+        };
+        let combined_tokens =
+            recent_tokens.saturating_add(estimated_tokens(&messages[previous_user..boundary]));
+        if messages.len().saturating_sub(previous_user) > maximum_recent_messages
+            || combined_tokens > maximum_recent_tokens
+        {
+            return boundary;
+        }
+        boundary = previous_user;
+        recent_tokens = combined_tokens;
+    }
+}
+
+fn estimated_tokens(messages: &[Value]) -> usize {
+    let bytes = messages
+        .iter()
+        .map(|message| serde_json::to_vec(message).map_or(usize::MAX, |json| json.len()))
+        .fold(0usize, usize::saturating_add);
+    bytes.saturating_add(1) / 2
 }
 
 fn existing_session_directory(workspace: &Workspace) -> Result<Option<PathBuf>> {
@@ -275,6 +441,15 @@ fn validate_record(record: &SessionRecord) -> Result<()> {
     if record.summarized_messages > record.messages.len() {
         return Err(storage_error(&format!(
             "session {} 的摘要边界超出消息历史",
+            record.id
+        )));
+    }
+    if record
+        .completed_messages
+        .is_some_and(|count| count > record.messages.len())
+    {
+        return Err(storage_error(&format!(
+            "session {} 的完成边界超出消息历史",
             record.id
         )));
     }
@@ -399,4 +574,67 @@ fn set_private_file_permissions(file: &File) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn set_private_file_permissions(_file: &File) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    use super::{list, open, start};
+    use crate::workspace::Workspace;
+
+    #[test]
+    fn persists_open_and_completed_turn_boundaries() {
+        let directory = tempdir().expect("workspace");
+        let workspace = Workspace::new(Some(directory.path())).expect("workspace root");
+        let mut lease = start(&workspace).expect("new session");
+        lease.record.description = "checkpoint test".to_owned();
+        let user = json!({"role":"user","content":"question"});
+        lease
+            .checkpoint_turn(&[], std::slice::from_ref(&user), false)
+            .expect("pending checkpoint");
+        assert_eq!(lease.record.completed_message_count(), 0);
+        let answer = json!({"role":"assistant","content":"answer"});
+        lease
+            .checkpoint_turn(&[], &[user, answer], true)
+            .expect("completed checkpoint");
+        let id = lease.record.id.clone();
+        drop(lease);
+
+        let reopened = open(&workspace, &id).expect("reopen session");
+        assert_eq!(reopened.record.completed_message_count(), 2);
+        assert_eq!(reopened.record.messages.len(), 2);
+    }
+
+    #[test]
+    fn lists_lightweight_metadata_and_skips_corrupt_records() {
+        let directory = tempdir().expect("workspace");
+        let workspace = Workspace::new(Some(directory.path())).expect("workspace root");
+        let (otto, _) = workspace.ensure_otto_directory().expect(".otto directory");
+        let sessions = otto.join("sessions");
+        fs::create_dir(&sessions).expect("sessions directory");
+        let id = "123e4567-e89b-42d3-a456-426614174000";
+        fs::write(
+            sessions.join(format!("{id}.json")),
+            json!({
+                "schema_version": 1,
+                "id": id,
+                "description": "kept",
+                "created_at": 1,
+                "updated_at": 2,
+                "messages": [{"role":"user","content":"large history is ignored"}]
+            })
+            .to_string(),
+        )
+        .expect("valid session");
+        fs::write(sessions.join("broken.json"), "{").expect("broken session");
+
+        let records = list(&workspace).expect("session list");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, id);
+        assert!(records[0].messages.is_empty());
+    }
 }
